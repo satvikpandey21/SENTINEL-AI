@@ -1,0 +1,144 @@
+name: sentinel-ai
+
+x-app-environment: &app-environment
+  SENTINEL_ENVIRONMENT: ${SENTINEL_ENVIRONMENT:-development}
+  SENTINEL_LOG_LEVEL: ${SENTINEL_LOG_LEVEL:-INFO}
+  SENTINEL_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sentinel}:${POSTGRES_PASSWORD:?Generate .env with python scripts/init_env.py}@postgres:5432/${POSTGRES_DB:-sentinel}
+  SENTINEL_REDIS_URL: redis://:${REDIS_PASSWORD:?Generate .env with python scripts/init_env.py}@redis:6379/0
+  SENTINEL_RABBITMQ_URL: amqp://${RABBITMQ_USER:-sentinel}:${RABBITMQ_PASSWORD:?Generate .env with python scripts/init_env.py}@rabbitmq:5672/
+  SENTINEL_DEPENDENCY_TIMEOUT_SECONDS: ${SENTINEL_DEPENDENCY_TIMEOUT_SECONDS:-3}
+  SENTINEL_DATABASE_POOL_SIZE: ${SENTINEL_DATABASE_POOL_SIZE:-5}
+  SENTINEL_DATABASE_MAX_OVERFLOW: ${SENTINEL_DATABASE_MAX_OVERFLOW:-5}
+  SENTINEL_TRUSTED_PROXY_CIDRS: ${SENTINEL_TRUSTED_PROXY_CIDRS:-[]}
+
+x-app: &app
+  image: sentinel-ai-app:0.1.0
+  build:
+    context: .
+    target: runtime
+  environment: *app-environment
+  networks: [backend]
+  init: true
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  restart: unless-stopped
+  healthcheck:
+    test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=5).close()"]
+    interval: 15s
+    timeout: 6s
+    retries: 3
+    start_period: 15s
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '3'
+
+services:
+  postgres:
+    image: postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sentinel}
+      POSTGRES_USER: ${POSTGRES_USER:-sentinel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Generate .env with python scripts/init_env.py}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    networks: [backend]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7.4.5-bookworm@sha256:90e7a336d044f1abc9e9dbc05d65566850896d11453bbd1dd0fb7e5059f0e8fb
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Generate .env with python scripts/init_env.py}
+    command: [sh, -c, 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"']
+    volumes: [redis_data:/data]
+    networks: [backend]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  rabbitmq:
+    image: rabbitmq:4.1.4-management@sha256:294b01e1796a8acede4619f32a1c394fae1f8021e57986ea01aad38dc2a4f502
+    hostname: sentinel-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-sentinel}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Generate .env with python scripts/init_env.py}
+    volumes: [rabbitmq_data:/var/lib/rabbitmq]
+    networks: [backend]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, check_running]
+      interval: 10s
+      timeout: 8s
+      retries: 12
+      start_period: 20s
+
+  migrate:
+    <<: *app
+    command: [alembic, upgrade, head]
+    restart: 'no'
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  admin-api:
+    <<: *app
+    networks: [backend, ingress]
+    ports: ['127.0.0.1:8000:8000']
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  demo-api:
+    <<: *app
+    command: [uvicorn, 'sentinel_demo.main:create_app', --factory, --host, 0.0.0.0, --port, '8000', --no-proxy-headers, --no-access-log, --log-config, /app/uvicorn-log.json]
+    # Deliberately internal; use compose.dev.yaml for a localhost-only development port.
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  tests:
+    profiles: [test]
+    build:
+      context: .
+      target: test
+    environment:
+      <<: *app-environment
+      SENTINEL_RUN_INTEGRATION: "1"
+    networks: [backend]
+    depends_on:
+      admin-api:
+        condition: service_healthy
+      demo-api:
+        condition: service_healthy
+    command: [python, -m, pytest, -p, 'no:cacheprovider', -m, integration, -q]
+
+networks:
+  backend:
+    internal: true
+  ingress:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:

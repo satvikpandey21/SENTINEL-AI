@@ -1,0 +1,25 @@
+name: Day 1 checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install --require-hashes -r requirements-dev.txt
+      - run: pip install --no-deps -e packages/sentinel-security -e apps/admin-api -e apps/demo-api
+      - run: ruff check . && ruff format --check .
+      - run: pytest -m 'not integration' --cov=sentinel_security --cov=sentinel_api --cov=sentinel_demo --cov-report=term-missing --cov-fail-under=85
+      - run: python scripts/init_env.py
+      - run: docker compose config --quiet
+      - run: docker compose up --build --wait --wait-timeout 180
+      - run: docker compose --profile test run --build --rm tests
+      - if: failure()
+        run: docker compose logs --tail=100
+      - if: always()
+        run: docker compose down
