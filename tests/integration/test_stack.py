@@ -24,7 +24,7 @@ async def test_real_dependency_health_and_migration():
         assert await resources.health() == {"postgresql": "up", "redis": "up", "rabbitmq": "up"}
         async with resources.session_factory() as session:
             revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-            assert revision == "0001_baseline"
+            assert revision == "0002_security_events"
             assert await session.scalar(text("SELECT 42")) == 42
 
 

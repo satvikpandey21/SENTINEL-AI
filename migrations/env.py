@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from sentinel_security.config import Settings
 from sentinel_security.database import Base
+from sentinel_security.storage import SecurityEventRecord  # noqa: F401 - register audit metadata
 
 settings = Settings()
 target_metadata = Base.metadata

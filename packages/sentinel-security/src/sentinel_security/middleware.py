@@ -1,11 +1,14 @@
 """Pure ASGI context middleware, independent of brokers and request body consumption."""
 
+from datetime import UTC, datetime
 from ipaddress import ip_address, ip_network
 from time import perf_counter
 from uuid import uuid4
 
 import structlog
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from sentinel_security.events import EventSink, build_event, route_template
 
 
 def client_ip(scope: Scope, trusted_proxy_cidrs: tuple[str, ...]) -> str:
@@ -35,9 +38,24 @@ def client_ip(scope: Scope, trusted_proxy_cidrs: tuple[str, ...]) -> str:
 
 
 class RequestContextMiddleware:
-    def __init__(self, app: ASGIApp, trusted_proxy_cidrs: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        trusted_proxy_cidrs: tuple[str, ...] = (),
+        *,
+        service: str = "asgi-api",
+        event_sink: EventSink | None = None,
+        identity_key: bytes | None = None,
+        excluded_paths: tuple[str, ...] = ("/health", "/docs", "/openapi.json"),
+    ) -> None:
+        if event_sink is not None and (identity_key is None or len(identity_key) < 32):
+            raise ValueError("monitoring requires a client identity key of at least 32 bytes")
         self.app = app
         self.trusted_proxy_cidrs = trusted_proxy_cidrs
+        self.service = service
+        self.event_sink = event_sink
+        self.identity_key = identity_key
+        self.excluded_paths = excluded_paths
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -49,10 +67,13 @@ class RequestContextMiddleware:
             request_id=request_id, client_ip=client_ip(scope, self.trusted_proxy_cidrs)
         )
         start = perf_counter()
+        occurred_at = datetime.now(UTC)
         status = 500
+        response_completed = False
+        application_failed = False
 
         async def send_with_context(message: Message) -> None:
-            nonlocal status
+            nonlocal status, response_completed
             if message["type"] == "http.response.start":
                 status = message["status"]
                 headers = [
@@ -60,17 +81,47 @@ class RequestContextMiddleware:
                 ]
                 message["headers"] = [*headers, (b"x-request-id", request_id.encode("ascii"))]
             await send(message)
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                response_completed = True
 
         try:
             await self.app(scope, receive, send_with_context)
+        except BaseException:
+            application_failed = True
+            raise
         finally:
             # Log the registered route template only: raw paths may contain sensitive values.
-            route = scope.get("route")
+            elapsed_ms = round((perf_counter() - start) * 1000, 3)
             structlog.get_logger().info(
                 "http_request",
                 method=scope["method"],
-                route=getattr(route, "path", "unmatched"),
+                route=route_template(scope),
                 status=status,
-                duration_ms=round((perf_counter() - start) * 1000, 3),
+                duration_ms=elapsed_ms,
             )
+            path = scope.get("path", "")
+            excluded = any(
+                path == prefix or path.startswith(prefix.rstrip("/") + "/")
+                for prefix in self.excluded_paths
+            )
+            if self.event_sink is not None and not excluded:
+                try:
+                    self.event_sink.offer(
+                        build_event(
+                            scope=scope,
+                            request_id=request_id,
+                            occurred_at=occurred_at,
+                            service=self.service,
+                            duration_ms=elapsed_ms,
+                            status_code=status,
+                            client_ip=scope["state"]["client_ip"],
+                            identity_key=self.identity_key,
+                            response_completed=response_completed,
+                            application_failed=application_failed,
+                        )
+                    )
+                except Exception as error:
+                    structlog.get_logger().warning(
+                        "monitoring_event_failed", error_type=type(error).__name__
+                    )
             structlog.contextvars.reset_contextvars(**tokens)

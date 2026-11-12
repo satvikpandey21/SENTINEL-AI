@@ -1,4 +1,4 @@
-name: Day 1 checks
+name: Sentinel checks
 on: [push, pull_request]
 permissions:
   contents: read
@@ -12,9 +12,9 @@ jobs:
           python-version: '3.11'
           cache: pip
       - run: pip install --require-hashes -r requirements-dev.txt
-      - run: pip install --no-deps -e packages/sentinel-security -e apps/admin-api -e apps/demo-api
+      - run: pip install --no-deps -e packages/sentinel-security -e apps/admin-api -e apps/demo-api -e apps/event-worker
       - run: ruff check . && ruff format --check .
-      - run: pytest -m 'not integration' --cov=sentinel_security --cov=sentinel_api --cov=sentinel_demo --cov-report=term-missing --cov-fail-under=85
+      - run: pytest -m 'not integration' --cov=sentinel_security --cov=sentinel_api --cov=sentinel_demo --cov=sentinel_worker --cov-report=term-missing --cov-fail-under=85
       - run: python scripts/init_env.py
       - run: docker compose config --quiet
       - run: docker compose up --build --wait --wait-timeout 180

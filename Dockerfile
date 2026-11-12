@@ -10,7 +10,8 @@ RUN pip install --require-hashes -r requirements.txt
 COPY packages/sentinel-security packages/sentinel-security
 COPY apps/admin-api apps/admin-api
 COPY apps/demo-api apps/demo-api
-RUN pip wheel --no-deps --wheel-dir /wheels ./packages/sentinel-security ./apps/admin-api ./apps/demo-api \
+COPY apps/event-worker apps/event-worker
+RUN pip wheel --no-deps --wheel-dir /wheels ./packages/sentinel-security ./apps/admin-api ./apps/demo-api ./apps/event-worker \
     && pip install --no-index --no-deps /wheels/*.whl
 
 FROM ${PYTHON_IMAGE} AS runtime
@@ -30,6 +31,7 @@ USER root
 COPY requirements-dev.txt ./
 RUN pip install --require-hashes -r requirements-dev.txt
 COPY tests ./tests
+COPY scripts ./scripts
 COPY pyproject.toml ./
 USER 10001:10001
 CMD ["python", "-m", "pytest", "-p", "no:cacheprovider", "-m", "integration", "-q"]

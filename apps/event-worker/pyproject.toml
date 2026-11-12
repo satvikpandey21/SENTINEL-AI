@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentinel-event-worker"
+version = "0.1.0"
+description = "SENTINEL durable monitoring event consumer"
+requires-python = ">=3.11"
+dependencies = ["sentinel-security==0.1.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

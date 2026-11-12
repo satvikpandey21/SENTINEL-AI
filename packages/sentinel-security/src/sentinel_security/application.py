@@ -1,8 +1,7 @@
 """Shared lifecycle and operational endpoints; no administrative business routes yet."""
 
-import logging
 from collections.abc import Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
@@ -12,25 +11,27 @@ from sentinel_security.config import Settings
 from sentinel_security.infrastructure import Resources
 from sentinel_security.logging import configure_logging
 from sentinel_security.middleware import RequestContextMiddleware
+from sentinel_security.publisher import EventPublisher
 
 
 def create_application(
     service: str,
     settings: Settings | None = None,
     resource_factory: Callable = Resources,
+    publisher_factory: Callable = EventPublisher,
 ) -> FastAPI:
     settings = settings or Settings()
     configure_logging(settings.log_level)
-    # Dependency library messages may contain credentials. Our probes emit safe structured events.
-    for name in ("aio_pika", "aiormq", "pamqp", "sqlalchemy", "redis"):
-        logger = logging.getLogger(name)
-        logger.handlers = [logging.NullHandler()]
-        logger.propagate = False
+    publisher = publisher_factory(settings) if settings.monitoring_enabled else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        async with resource_factory(settings) as resources:
+        async with AsyncExitStack() as stack:
+            resources = await stack.enter_async_context(resource_factory(settings))
             app.state.resources = resources
+            if publisher is not None:
+                await stack.enter_async_context(publisher)
+                app.state.event_publisher = publisher
             structlog.get_logger().info("service_started", service=service)
             try:
                 yield
@@ -45,7 +46,18 @@ def create_application(
         redoc_url=None,
         openapi_url="/openapi.json" if settings.environment == "development" else None,
     )
-    app.add_middleware(RequestContextMiddleware, trusted_proxy_cidrs=settings.trusted_proxy_cidrs)
+    app.add_middleware(
+        RequestContextMiddleware,
+        trusted_proxy_cidrs=settings.trusted_proxy_cidrs,
+        service=service,
+        event_sink=publisher,
+        identity_key=(
+            bytes.fromhex(settings.client_identity_key.get_secret_value())
+            if settings.client_identity_key is not None
+            else None
+        ),
+        excluded_paths=settings.monitoring_excluded_paths,
+    )
 
     @app.exception_handler(Exception)
     async def unexpected_error(request: Request, error: Exception):
