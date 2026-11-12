@@ -14,9 +14,9 @@ Alembic owns schema history. The initial revision deliberately has no speculativ
 
 | Component | Responsibility | Must not own |
 | --- | --- | --- |
-| Security engine | Configurable rules, explainable scores, statistical/ML inference | HTTP transport, broker availability |
+| Security engine (Phase 3 rules) | Validated policies and Redis decisions; ML/scoring remains future work | HTTP transport, broker availability |
 | Reusable middleware | Safe request metadata and synchronous enforcement adapter | Administrative UI, asynchronous persistence |
-| Redis enforcement adapter | Atomic distributed counters, expiry, bounded failure policy | Audit durability |
+| Redis enforcement adapter (Phase 3) | Atomic distributed counters, expiry, bounded failure policy | Audit durability |
 | Demo API | Controlled API workload behind middleware and later authentication | Security administration |
 | Administrative API | JWT authorization, policy management, audit queries | Demo business behavior |
 | Event publisher (Day 2) | Bounded publication, explicit retry/delivery semantics | Synchronous allow/deny decisions |
@@ -26,7 +26,7 @@ Alembic owns schema history. The initial revision deliberately has no speculativ
 
 A RabbitMQ outage must not automatically bypass Redis rate limiting. Publication failure and enforcement failure need independent configuration, metrics, and tests. Redis failure policy must be explicit per protected route or deployment rather than silently allowing everything. Readiness may report degraded dependencies while the request path still enforces available controls; a future deployment should decide whether a degraded broker removes an instance from routing.
 
-Detection thresholds, sampling, lockout TTLs, allowlists, observation mode, and escalating actions need typed policy models and false-positive tests before enforcement is enabled. Authentication and traffic simulation must be scoped to the owned demo. Passwords, tokens, bodies, and secrets are outside the telemetry contract. Future audit records should contain allowlisted metadata, with retention and access policies.
+Phase 3 provides typed threshold/expiry/observation policies and false-positive safeguards for deterministic rules. Sampling, richer identity, allowlists, and advanced actions remain future policy work. Authentication and traffic simulation must be scoped to the owned demo. Passwords, tokens, bodies, and secrets are outside the telemetry contract. Future audit records should contain allowlisted metadata, with retention and access policies.
 
 ## Operational tradeoffs
 
@@ -52,3 +52,23 @@ Transient SQL connection/resource/transaction failures have bounded retries with
 `0002_security_events` stores explicit typed columns rather than an unbounded JSON payload. It adds timestamp, service/time, severity/time, client/time, and request-ID indexes, as well as schema/status/duration/severity/authentication constraints. No API request opens a database connection for event persistence. A separate worker heartbeat probes the pooled database connection and records connection supervision health without exposing audit data.
 
 Default resource limits, failure semantics, verification, and replay commands are documented in the README. The worker is sequential per replica; additional replicas can share the queue. Long storage retries can cause head-of-line delay within one worker, which intentionally reduces pressure on a failing database. Production scaling should follow workload measurement.
+
+## Phase 3: Redis-only synchronous protection
+
+`policies.py` defines immutable validated endpoint groups, rate rules, and verified-authentication rules. Selection uses the most-specific full path-segment prefix and optional method set; group count and identifiers are bounded. The policy fingerprint is part of Redis state identity, so all API instances must deploy the same configuration and HMAC key. This avoids per-URL key creation and isolates services/groups while allowing intentional policy changes to start fresh state.
+
+`SecurityEngine` depends only on a Redis store and typed policy definitions. It imports no worker, broker, demo authentication, or database module. Two cached Lua scripts perform atomic server-time sliding-window admission and verified-failure tracking. Each group/client has at most rate, failure, and temporary-block keys, with validated finite TTLs and capped sorted-set membership. Script registration uses cached SHA execution and automatically reloads after Redis restart. Atomicity follows Redis's [Lua execution guarantee](https://redis.io/docs/latest/develop/interact/programmability/eval-intro/).
+
+The existing request-context/monitoring middleware is outermost around an optional protection adapter. It establishes the trusted peer, HMAC identity, request ID, and timing first. Pre-routing Redis checks can return generic 429/Retry-After or fail-closed 503. The outer middleware still observes those responses and emits HTTP metadata. Endpoint labels for pre-routing rejections come from the static selected policy prefix, never the submitted raw path.
+
+The inner adapter runs the application after admission. A trusted demo authenticator explicitly marks verified success/failure in request-local scope state. Before forwarding response headers, the adapter atomically updates authentication state. Generic 401s and ordinary authentication outcome annotations do not enter this counter. If a required Redis write fails after credentials were checked, the adapter can replace the response with a generic 503 and suppress the original success body. Existing streaming responses otherwise pass through untouched.
+
+The test-only authenticator is owned by `sentinel_demo`, not the reusable engine. It has bounded JSON parsing, generic errors, salted fixed-cost scrypt verification in a bounded thread workload, constant-time comparisons, and hash-only environment configuration. It issues no token/session and is rejected in production mode. A separate host initializer prompts for a password or creates a random discarded-password hash; neither raw passwords nor login bodies are persisted.
+
+Actions are allow, observe/record, rate-limit, and finite group-scoped block. A separate deny action describes fail-closed infrastructure unavailability. Shared-IP false positives are addressed with endpoint-specific quotas, observation policies, login-only restrictions, explicit thresholds, and optional successful-login reset. Client-wide attribution beyond the existing IP pseudonym is intentionally not claimed. A newly created block applies to future admission checks; already admitted in-flight requests are not retroactively cancelled.
+
+HTTP events retain schema version 1. Independently identified version 2 decision events contain rule/action, bounded counter and threshold, window, restriction expiry/retry, and degradation metadata. `0003_security_decisions` adds nullable columns and version-aware constraints, preserving all existing v1 records; the worker and replay/quarantine parsing use a discriminated union. Duplicate prevention remains the event UUID primary key. No scores or unprotected event-query routes are introduced.
+
+Redis failures are explicit per policy, with a bounded operation deadline. Ordinary groups fail open and emit/log degradation; the default login group fails closed. RabbitMQ publication and PostgreSQL writes remain outside this decision path. Confirmed delivery, retries, quarantine, replay, and unconfirmed-event loss semantics retain the Day 2 contract. Production replicas require shared policy/key deployment and appropriately secured Redis permissions; this local single-node service is not a highly available cluster.
+
+A host verification command temporarily configures the actual demo with short policies and hash-only credentials, uses two genuine network peer identities, checks real PostgreSQL events, then restores the service in finally. This is controlled owned-API traffic and real enforcement, not a mock response or synthetic threat score. It must run separately from concurrent demo deployment changes.

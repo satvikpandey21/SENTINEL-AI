@@ -4,10 +4,10 @@ import hashlib
 import hmac
 import re
 from datetime import UTC, datetime
-from typing import Literal, Protocol
+from typing import Annotated, Literal, Protocol, TypeAlias
 from uuid import UUID, uuid4
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 from starlette.types import Scope
 
 SCHEMA_VERSION = 1
@@ -55,8 +55,37 @@ class SecurityEvent(BaseModel):
         return cls.model_validate_json(body)
 
 
+class DetectionEvent(SecurityEvent):
+    schema_version: Literal[2]
+    event_type: Literal["security.decision"]
+    rule_id: str = Field(min_length=1, max_length=96, pattern=r"^[a-zA-Z0-9_.-]+$")
+    security_action: Literal["record", "rate_limit", "temporary_block", "deny"]
+    counter_value: int | None = Field(default=None, ge=0, le=10001)
+    threshold: int | None = Field(default=None, ge=1, le=10000)
+    window_seconds: float | None = Field(default=None, ge=0.1, le=3600)
+    retry_after_seconds: int | None = Field(default=None, ge=1, le=3600)
+    restriction_expires_at: AwareDatetime | None = None
+    degraded: bool = False
+
+
+MonitoringEvent: TypeAlias = Annotated[
+    SecurityEvent | DetectionEvent, Field(discriminator="schema_version")
+]
+_EVENT_ADAPTER = TypeAdapter(MonitoringEvent)
+
+
+def parse_event(body: bytes, max_bytes: int) -> SecurityEvent | DetectionEvent:
+    if len(body) > max_bytes:
+        raise ValueError("event exceeds size limit")
+    return _EVENT_ADAPTER.validate_json(body)
+
+
+def client_identifier(address: str, identity_key: bytes) -> str:
+    return hmac.new(identity_key, address.encode("ascii"), hashlib.sha256).hexdigest()
+
+
 class EventSink(Protocol):
-    def offer(self, event: SecurityEvent) -> bool: ...
+    def offer(self, event: MonitoringEvent) -> bool: ...
 
 
 def record_authentication_outcome(scope: Scope, outcome: AuthenticationOutcome) -> None:
@@ -68,7 +97,9 @@ def record_authentication_outcome(scope: Scope, outcome: AuthenticationOutcome) 
 
 def route_template(scope: Scope) -> str:
     # ASGI routers without a registered template intentionally collapse to 'unmatched'.
-    value = getattr(scope.get("route"), "path", "unmatched")
+    value = getattr(
+        scope.get("route"), "path", scope.get("state", {}).get("sentinel_endpoint", "unmatched")
+    )
     if isinstance(value, str) and len(value) <= 256:
         if value == "unmatched" or re.fullmatch(r"/[a-zA-Z0-9_./{}:~-]*", value):
             return value
@@ -120,9 +151,7 @@ def build_event(
         endpoint=route_template(scope),
         status_code=status_code,
         duration_ms=min(MAX_DURATION_MS, max(0.0, duration_ms)),
-        client_identifier=hmac.new(
-            identity_key, client_ip.encode("ascii"), hashlib.sha256
-        ).hexdigest(),
+        client_identifier=client_identifier(client_ip, identity_key),
         severity=severity,
         authentication_outcome=outcome,
         response_completed=response_completed,
@@ -140,4 +169,4 @@ class DeadLetterNotice(BaseModel):
         "invalid_event", "oversized_event", "retry_exhausted", "permanent_storage_error"
     ]
     payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    event: SecurityEvent | None = None
+    event: MonitoringEvent | None = None

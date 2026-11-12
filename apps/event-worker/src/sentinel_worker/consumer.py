@@ -10,7 +10,7 @@ from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, Opera
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from sentinel_security.config import Settings
-from sentinel_security.events import DeadLetterNotice, SecurityEvent
+from sentinel_security.events import DeadLetterNotice, MonitoringEvent, parse_event
 from sentinel_security.messaging import DEAD_QUEUE, event_message
 from sentinel_security.storage import EventStore
 
@@ -43,7 +43,7 @@ class EventConsumer:
         self.channel = channel
         self.settings = settings
 
-    async def _quarantine(self, message, reason, event: SecurityEvent | None = None) -> None:
+    async def _quarantine(self, message, reason, event: MonitoringEvent | None = None) -> None:
         notice = DeadLetterNotice(
             reason=reason, payload_sha256=hashlib.sha256(message.body).hexdigest(), event=event
         )
@@ -62,7 +62,7 @@ class EventConsumer:
             await self._quarantine(message, "oversized_event")
             return
         try:
-            event = SecurityEvent.from_wire(message.body, self.settings.event_max_bytes)
+            event = parse_event(message.body, self.settings.event_max_bytes)
         except (ValidationError, ValueError):
             await self._quarantine(message, "invalid_event")
             return

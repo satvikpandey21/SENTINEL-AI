@@ -7,6 +7,8 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from sentinel_security.policies import EndpointPolicy, default_policies, validate_policies
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -22,6 +24,21 @@ class Settings(BaseSettings):
     database_pool_size: int = Field(default=5, ge=1, le=50)
     database_max_overflow: int = Field(default=5, ge=0, le=50)
     trusted_proxy_cidrs: tuple[str, ...] = ()
+
+    protection_enabled: bool = False
+    protection_redis_timeout_seconds: float = Field(default=0.2, ge=0.01, le=2, allow_inf_nan=False)
+    protection_policies: tuple[EndpointPolicy, ...] | None = None
+
+    @field_validator("protection_policies")
+    @classmethod
+    def validate_protection_policies(cls, value):
+        return validate_policies(value) if value is not None else None
+
+    @property
+    def effective_policies(self) -> tuple[EndpointPolicy, ...]:
+        return (
+            self.protection_policies if self.protection_policies is not None else default_policies()
+        )
 
     monitoring_enabled: bool = False
     client_identity_key: SecretStr | None = None
@@ -59,8 +76,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def require_identity_key(self):
-        if self.monitoring_enabled and self.client_identity_key is None:
-            raise ValueError("monitoring requires SENTINEL_CLIENT_IDENTITY_KEY")
+        if (
+            self.monitoring_enabled or self.protection_enabled
+        ) and self.client_identity_key is None:
+            raise ValueError("monitoring/protection requires SENTINEL_CLIENT_IDENTITY_KEY")
         return self
 
     @field_validator("database_url", "redis_url", "rabbitmq_url")

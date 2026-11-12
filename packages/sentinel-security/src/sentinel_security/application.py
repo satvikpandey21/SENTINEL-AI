@@ -11,6 +11,7 @@ from sentinel_security.config import Settings
 from sentinel_security.infrastructure import Resources
 from sentinel_security.logging import configure_logging
 from sentinel_security.middleware import RequestContextMiddleware
+from sentinel_security.protection import RedisProtectionStore, SecurityEngine
 from sentinel_security.publisher import EventPublisher
 
 
@@ -51,6 +52,17 @@ def create_application(
         trusted_proxy_cidrs=settings.trusted_proxy_cidrs,
         service=service,
         event_sink=publisher,
+        security_engine=(
+            SecurityEngine(
+                RedisProtectionStore(
+                    lambda: app.state.resources.redis, settings.protection_redis_timeout_seconds
+                ),
+                service,
+                settings.effective_policies,
+            )
+            if settings.protection_enabled
+            else None
+        ),
         identity_key=(
             bytes.fromhex(settings.client_identity_key.get_secret_value())
             if settings.client_identity_key is not None

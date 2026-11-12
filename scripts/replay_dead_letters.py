@@ -6,7 +6,7 @@ import asyncio
 import aio_pika
 
 from sentinel_security.config import Settings
-from sentinel_security.events import DeadLetterNotice, SecurityEvent
+from sentinel_security.events import DeadLetterNotice, parse_event
 from sentinel_security.messaging import DEAD_QUEUE, EVENT_QUEUE, event_message
 
 
@@ -30,7 +30,7 @@ async def replay(limit: int) -> None:
                     if notice.event is None:
                         raise ValueError("notice has no replayable event")
                     body = notice.event.model_dump_json().encode()
-                    SecurityEvent.from_wire(body, settings.event_max_bytes)
+                    parse_event(body, settings.event_max_bytes)
                 except ValueError:
                     skipped.append(message)
                     continue

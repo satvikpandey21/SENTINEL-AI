@@ -20,6 +20,8 @@ x-app-environment: &app-environment
   SENTINEL_WORKER_PREFETCH: ${SENTINEL_WORKER_PREFETCH:-16}
   SENTINEL_WORKER_STORAGE_ATTEMPTS: ${SENTINEL_WORKER_STORAGE_ATTEMPTS:-4}
   SENTINEL_WORKER_STORAGE_TIMEOUT_SECONDS: ${SENTINEL_WORKER_STORAGE_TIMEOUT_SECONDS:-3}
+  SENTINEL_PROTECTION_POLICIES: ${SENTINEL_PROTECTION_POLICIES:-null}
+  SENTINEL_PROTECTION_REDIS_TIMEOUT_SECONDS: ${SENTINEL_PROTECTION_REDIS_TIMEOUT_SECONDS:-0.2}
   SENTINEL_TRUSTED_PROXY_CIDRS: ${SENTINEL_TRUSTED_PROXY_CIDRS:-[]}
 
 x-app: &app
@@ -64,7 +66,7 @@ services:
       retries: 12
 
   redis:
-    image: redis:7.4.5-bookworm@sha256:90e7a336d044f1abc9e9dbc05d65566850896d11453bbd1dd0fb7e5059f0e8fb
+    image: redis:7.4-bookworm@sha256:2e3eb11462c4e3759e6972678dd051d150ff54b1e60714b3c33b701260172a90
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Generate .env with python scripts/init_env.py}
     command: [sh, -c, 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"']
@@ -121,6 +123,10 @@ services:
     <<: *app
     environment:
       <<: *app-environment
+      SENTINEL_PROTECTION_ENABLED: ${SENTINEL_PROTECTION_ENABLED:-true}
+      SENTINEL_DEMO_AUTH_ENABLED: ${SENTINEL_DEMO_AUTH_ENABLED:-true}
+      SENTINEL_DEMO_USERNAME: ${SENTINEL_DEMO_USERNAME:-sentinel-demo}
+      SENTINEL_DEMO_PASSWORD_HASH: ${SENTINEL_DEMO_PASSWORD_HASH:?Run python scripts/configure_demo_auth.py --initialize}
       SENTINEL_MONITORING_ENABLED: "true"
       SENTINEL_CLIENT_IDENTITY_KEY: ${SENTINEL_CLIENT_IDENTITY_KEY:?Run python scripts/init_env.py --add-monitoring-key}
     command: [uvicorn, 'sentinel_demo.main:create_app', --factory, --host, 0.0.0.0, --port, '8000', --no-proxy-headers, --no-access-log, --log-config, /app/uvicorn-log.json]

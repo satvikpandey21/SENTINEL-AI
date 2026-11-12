@@ -8,7 +8,9 @@ from uuid import uuid4
 import structlog
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from sentinel_security.events import EventSink, build_event, route_template
+from sentinel_security.events import DetectionEvent, EventSink, build_event, route_template
+from sentinel_security.protection import SecurityEngine
+from sentinel_security.protection_middleware import ProtectionMiddleware
 
 
 def client_ip(scope: Scope, trusted_proxy_cidrs: tuple[str, ...]) -> str:
@@ -45,12 +47,19 @@ class RequestContextMiddleware:
         *,
         service: str = "asgi-api",
         event_sink: EventSink | None = None,
+        security_engine: SecurityEngine | None = None,
         identity_key: bytes | None = None,
         excluded_paths: tuple[str, ...] = ("/health", "/docs", "/openapi.json"),
     ) -> None:
-        if event_sink is not None and (identity_key is None or len(identity_key) < 32):
+        if (event_sink is not None or security_engine is not None) and (
+            identity_key is None or len(identity_key) < 32
+        ):
             raise ValueError("monitoring requires a client identity key of at least 32 bytes")
-        self.app = app
+        self.app = (
+            ProtectionMiddleware(app, security_engine, identity_key, excluded_paths)
+            if security_engine is not None
+            else app
+        )
         self.trusted_proxy_cidrs = trusted_proxy_cidrs
         self.service = service
         self.event_sink = event_sink
@@ -106,20 +115,39 @@ class RequestContextMiddleware:
             )
             if self.event_sink is not None and not excluded:
                 try:
-                    self.event_sink.offer(
-                        build_event(
-                            scope=scope,
-                            request_id=request_id,
-                            occurred_at=occurred_at,
-                            service=self.service,
-                            duration_ms=elapsed_ms,
-                            status_code=status,
-                            client_ip=scope["state"]["client_ip"],
-                            identity_key=self.identity_key,
-                            response_completed=response_completed,
-                            application_failed=application_failed,
-                        )
+                    event = build_event(
+                        scope=scope,
+                        request_id=request_id,
+                        occurred_at=occurred_at,
+                        service=self.service,
+                        duration_ms=elapsed_ms,
+                        status_code=status,
+                        client_ip=scope["state"]["client_ip"],
+                        identity_key=self.identity_key,
+                        response_completed=response_completed,
+                        application_failed=application_failed,
                     )
+                    self.event_sink.offer(event)
+                    for decision in scope.get("state", {}).get("sentinel_decisions", ()):
+                        self.event_sink.offer(
+                            DetectionEvent(
+                                **{
+                                    **event.model_dump(),
+                                    "schema_version": 2,
+                                    "event_type": "security.decision",
+                                    "event_id": uuid4(),
+                                    "rule_id": decision.rule_id,
+                                    "security_action": decision.action,
+                                    "counter_value": decision.counter_value,
+                                    "threshold": decision.threshold,
+                                    "window_seconds": decision.window_seconds,
+                                    "retry_after_seconds": decision.retry_after_seconds,
+                                    "restriction_expires_at": decision.restriction_expires_at,
+                                    "degraded": decision.degraded,
+                                    "severity": "error" if decision.action == "deny" else "warning",
+                                }
+                            )
+                        )
                 except Exception as error:
                     structlog.get_logger().warning(
                         "monitoring_event_failed", error_type=type(error).__name__

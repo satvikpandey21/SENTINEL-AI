@@ -3,21 +3,42 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, Index, SmallInteger, String, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    SmallInteger,
+    String,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, mapped_column
 
 from sentinel_security.database import Base
-from sentinel_security.events import SecurityEvent
+from sentinel_security.events import MonitoringEvent
 
 
 class SecurityEventRecord(Base):
     __tablename__ = "security_events"
     __table_args__ = (
-        CheckConstraint("schema_version = 1", name="ck_security_events_version"),
-        CheckConstraint("event_type = 'http.request.completed'", name="ck_security_events_type"),
+        CheckConstraint("schema_version IN (1, 2)", name="ck_security_events_version"),
+        CheckConstraint(
+            "(schema_version = 1 AND event_type = 'http.request.completed' "
+            "AND rule_id IS NULL AND security_action IS NULL AND degraded IS NULL) OR "
+            "(schema_version = 2 AND event_type = 'security.decision' AND rule_id IS NOT NULL "
+            "AND security_action IN ('record','rate_limit','temporary_block','deny') "
+            "AND degraded IS NOT NULL)",
+            name="ck_security_events_type",
+        ),
+        CheckConstraint("counter_value BETWEEN 0 AND 10001", name="ck_security_events_counter"),
+        CheckConstraint("threshold BETWEEN 1 AND 10000", name="ck_security_events_threshold"),
+        CheckConstraint("window_seconds BETWEEN 0.1 AND 3600", name="ck_security_events_window"),
+        CheckConstraint("retry_after_seconds BETWEEN 1 AND 3600", name="ck_security_events_retry"),
         CheckConstraint("status_code BETWEEN 100 AND 599", name="ck_security_events_status"),
         CheckConstraint("duration_ms BETWEEN 0 AND 86400000", name="ck_security_events_duration"),
         CheckConstraint(
@@ -34,6 +55,7 @@ class SecurityEventRecord(Base):
         Index("ix_security_events_severity_time", "severity", "occurred_at"),
         Index("ix_security_events_client_time", "client_identifier", "occurred_at"),
         Index("ix_security_events_request_id", "request_id"),
+        Index("ix_security_events_rule_time", "rule_id", "occurred_at"),
     )
 
     event_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
@@ -50,6 +72,16 @@ class SecurityEventRecord(Base):
     severity: Mapped[str] = mapped_column(String(10))
     authentication_outcome: Mapped[str] = mapped_column(String(16))
     response_completed: Mapped[bool] = mapped_column(Boolean)
+    rule_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    security_action: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    counter_value: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    threshold: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    window_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    retry_after_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    restriction_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    degraded: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -59,7 +91,7 @@ class EventStore:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self.sessions = sessions
 
-    async def persist(self, event: SecurityEvent) -> bool:
+    async def persist(self, event: MonitoringEvent) -> bool:
         statement = (
             insert(SecurityEventRecord)
             .values(**event.model_dump())

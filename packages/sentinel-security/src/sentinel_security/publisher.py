@@ -8,7 +8,7 @@ import aio_pika
 import structlog
 
 from sentinel_security.config import Settings
-from sentinel_security.events import SecurityEvent
+from sentinel_security.events import MonitoringEvent
 from sentinel_security.messaging import EVENT_QUEUE, declare_topology, event_message
 
 
@@ -47,7 +47,7 @@ class EventPublisher:
                 "telemetry_dropped", reason=reason, dropped_total=self.stats.dropped
             )
 
-    def offer(self, event: SecurityEvent) -> bool:
+    def offer(self, event: MonitoringEvent) -> bool:
         # No awaits, socket I/O, retry sleep, or database work on the request path.
         if not self._accepting:
             self._drop("publisher_stopped")

@@ -19,6 +19,12 @@ def settings(monkeypatch):
         "DATABASE_POOL_SIZE",
         "DATABASE_MAX_OVERFLOW",
         "TRUSTED_PROXY_CIDRS",
+        "PROTECTION_ENABLED",
+        "PROTECTION_POLICIES",
+        "PROTECTION_REDIS_TIMEOUT_SECONDS",
+        "DEMO_AUTH_ENABLED",
+        "DEMO_USERNAME",
+        "DEMO_PASSWORD_HASH",
     ):
         monkeypatch.delenv(f"SENTINEL_{key}", raising=False)
     return Settings(
