@@ -15,7 +15,35 @@ def main() -> None:
         action="store_true",
         help="Add only a missing monitoring key to an existing Day 1 .env",
     )
+    parser.add_argument(
+        "--add-admin-key",
+        action="store_true",
+        help="Add a missing independent administrative signing key",
+    )
     arguments = parser.parse_args()
+    if arguments.add_admin_key:
+        path = ROOT / ".env"
+        existing = path.read_text(encoding="utf-8")
+        key = "SENTINEL_ADMIN_SIGNING_KEY"
+        lines = existing.splitlines()
+        if any(line.startswith(key + "=") and line.split("=", 1)[1].strip() for line in lines):
+            print("Administrative signing key exists; preserving it.")
+            return
+        generated = key + "=" + secrets.token_hex(32)
+        found = any(line.startswith(key + "=") for line in lines)
+        lines = [generated if line.startswith(key + "=") else line for line in lines]
+        if not found:
+            lines.append(generated)
+        temporary = ROOT / ".env.admin.tmp"
+        descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
+                output.write("\n".join(lines) + "\n")
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        print("Added administrative signing key; existing credentials preserved.")
+        return
     if arguments.add_monitoring_key:
         path = ROOT / ".env"
         existing = path.read_text(encoding="utf-8")
@@ -51,6 +79,7 @@ def main() -> None:
         "REDIS_PASSWORD",
         "RABBITMQ_PASSWORD",
         "SENTINEL_CLIENT_IDENTITY_KEY",
+        "SENTINEL_ADMIN_SIGNING_KEY",
     ):
         template = template.replace(f"{key}=\n", f"{key}={secrets.token_hex(32)}\n")
     try:

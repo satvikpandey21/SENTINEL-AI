@@ -10,23 +10,23 @@ Resources belong to each application's lifespan. PostgreSQL and Redis pools init
 
 Alembic owns schema history. The initial revision deliberately has no speculative tables. A one-shot job runs before APIs start, guarded only by PostgreSQL health. Redis and RabbitMQ health gate initial API startup, but the APIs do not terminate because a broker later fails. The backend Docker network is internal. The admin API also joins an ingress bridge to support its loopback-only published port; Docker Engine 29 does not publish ports for internal-only containers. The demo ping is not authenticated in Day 1 and has no default host binding.
 
-## Component boundaries (detection, enforcement, UI, and authentication remain future work)
+## Component boundaries
 
 | Component | Responsibility | Must not own |
 | --- | --- | --- |
-| Security engine (Phase 3 rules) | Validated policies and Redis decisions; ML/scoring remains future work | HTTP transport, broker availability |
+| Security engine (Phase 3 rules) | Validated policies and Redis decisions; ML/scoring belongs to the worker | HTTP transport, broker availability |
 | Reusable middleware | Safe request metadata and synchronous enforcement adapter | Administrative UI, asynchronous persistence |
 | Redis enforcement adapter (Phase 3) | Atomic distributed counters, expiry, bounded failure policy | Audit durability |
-| Demo API | Controlled API workload behind middleware and later authentication | Security administration |
+| Demo API | Controlled API workload behind middleware and isolated demo authentication | Security administration |
 | Administrative API | JWT authorization, policy management, audit queries | Demo business behavior |
 | Event publisher (Day 2) | Bounded publication, explicit retry/delivery semantics | Synchronous allow/deny decisions |
-| Asynchronous worker (Day 2) | Event consumption and durable audit writes; analysis is future work | Request-path rate-limit decisions |
+| Asynchronous worker (Day 2) | Event consumption, durable event writes, and asynchronous threat analysis | Request-path rate-limit decisions |
 | React dashboard | Authenticated operational view and real-time notifications | Access tokens in logs or security decisions |
 | Monitoring | Prometheus service metrics and Grafana dashboards | Sensitive request payload collection |
 
 A RabbitMQ outage must not automatically bypass Redis rate limiting. Publication failure and enforcement failure need independent configuration, metrics, and tests. Redis failure policy must be explicit per protected route or deployment rather than silently allowing everything. Readiness may report degraded dependencies while the request path still enforces available controls; a future deployment should decide whether a degraded broker removes an instance from routing.
 
-Phase 3 provides typed threshold/expiry/observation policies and false-positive safeguards for deterministic rules. Sampling, richer identity, allowlists, and advanced actions remain future policy work. Authentication and traffic simulation must be scoped to the owned demo. Passwords, tokens, bodies, and secrets are outside the telemetry contract. Future audit records should contain allowlisted metadata, with retention and access policies.
+Phase 3 provides typed threshold/expiry/observation policies and false-positive safeguards for deterministic rules. Sampling, richer identity, allowlists, and advanced actions remain future policy work. Authentication and traffic simulation must be scoped to the owned demo. Passwords, tokens, bodies, and secrets are outside the telemetry contract. Administrative audit records contain allowlisted metadata and enforce authenticated role-based access; retention remains an operational responsibility.
 
 ## Operational tradeoffs
 
@@ -35,7 +35,7 @@ Phase 3 provides typed threshold/expiry/observation policies and false-positive 
 - Service images and the Python base are pinned to verified release digests. Review upstream security updates and refresh pins intentionally; digest locking does not replace vulnerability monitoring.
 - Dependency readiness handshakes prioritize real authentication checks over lightweight TCP checks. If probe volume grows, tune frequency or introduce short-lived cached readiness without caching enforcement decisions.
 - Third-party connection errors are suppressed in favor of allowlisted dependency status/error-class events to avoid credentials leaking through exception messages.
-- No CORS policy, permissive JWT defaults, unused RabbitMQ consumer, or fake ML model is added in this milestone. Each will arrive with the feature that needs it and corresponding tests.
+- Administrative CORS, JWT, and session behavior are explicitly validated in Phase 5; no permissive authentication defaults or fabricated model responses are used.
 
 ## Day 2: monitoring and persistence
 
@@ -71,7 +71,7 @@ HTTP events retain schema version 1. Independently identified version 2 decision
 
 Redis failures are explicit per policy, with a bounded operation deadline. Ordinary groups fail open and emit/log degradation; the default login group fails closed. RabbitMQ publication and PostgreSQL writes remain outside this decision path. Confirmed delivery, retries, quarantine, replay, and unconfirmed-event loss semantics retain the Day 2 contract. Production replicas require shared policy/key deployment and appropriately secured Redis permissions; this local single-node service is not a highly available cluster.
 
-A host verification command temporarily configures the actual demo with short policies and hash-only credentials, uses two genuine network peer identities, checks real PostgreSQL events, then restores the service in finally. This is controlled owned-API traffic and real enforcement, not a mock response or synthetic threat score. It must run separately from concurrent demo deployment changes.
+A host verification command temporarily configures the actual demo with short policies and hash-only credentials, uses two genuine network peer identities, checks real PostgreSQL events, then restores the service in finally. This is controlled owned-API traffic and real enforcement, not a mock response or synthetic threat score. The legacy verifier explicitly selects static policy mode only for its temporary demo override, then restores managed enforcement; it never changes persisted managed revisions. It must run separately from concurrent demo deployment changes.
 
 ## Phase 4: asynchronous explainable threat analysis
 
@@ -83,8 +83,27 @@ The worker owns a single `AnalysisEngine` per process, constructed before connec
 
 `model_training.py` is an offline Scikit-learn Isolation Forest pipeline with fixed seeds, an explicit eight-feature schema, log transforms for count/timing, separate normal training/calibration windows, and held-out normal/anomalous/benign-shift evaluation. It exports only numeric JSON tree data, not executable Python objects. The runtime validates artifact size, regular-file status, a deployment-pinned SHA-256 digest, topology, tree/node/depth bounds, model/export/trainer/schema/window versions, and finite values. It evaluates at most 32 trees with depth seven and checks an inference deadline. Export parity is tested against Scikit-learn. ML runs on the preceding completed eligible window only on rotation; evidence includes its actual window and feature vector. Its experimental flag has no contribution to risk or enforcement.
 
-`analysis_states` stores a bounded profile plus configuration fingerprint; configuration changes reset the baseline. `risk_assessments` stores event reference, score, severity, structured classifications/evidence, feature/rule/model version, and analysis time. A unique event FK prevents duplicate assessments and cascades only when original audit data is deliberately removed. Service/client/time and severity/time indexes support a future authenticated dashboard. `AssessmentRepository` bounds internal reads; no new HTTP data endpoint is exposed.
+`analysis_states` stores a bounded profile plus configuration fingerprint; configuration changes reset the baseline. `risk_assessments` stores event reference, score, severity, structured classifications/evidence, feature/rule/model version, and analysis time. A unique event FK prevents duplicate assessments and cascades only when original audit data is deliberately removed. Service/client/time and severity/time indexes support the authenticated dashboard APIs added in Phase 5. `AssessmentRepository` continues to bound internal reads.
 
 Indexed retention batches run every minute with `SKIP LOCKED`, deleting at most the configured batch per table and preserving original audit events. Cleanup throughput is finite: monitor database growth and schedule additional bounded batches if expiry outpaces cleanup. Worker structured logs expose model status/load count, per-analysis latency, retention counts, and the previous storage/reconnect/drop signals. RabbitMQ queue-ready/unacknowledged counts and Docker resource snapshots remain operational commands until the monitoring milestone.
 
 The synthetic benchmark is an engineering reproducibility check. It does not validate a classifier for real attackers, tenants, shared NAT identities, seasonality, legitimate deployments, or production traffic shifts. Representative reviewed data and calibration are required before any security-classifier claim or ML enforcement policy. See `day-4-verification.md` for formulas, executed results, deployment steps, and caveats.
+
+
+## Phase 5: administrative control plane
+
+The administrative package owns accounts, Argon2id authentication, strict HS256 access JWTs, refresh families, and HTTP authorization. The reusable library owns versioned policy activation and allowlisted audit storage; its Redis-only policy reader keeps PostgreSQL outside the middleware request path. Demo credential checking is unchanged and cannot provision accounts or issue administrative tokens.
+
+Administrative accounts, session families, refresh/CSRF digests, and audit records live in PostgreSQL. A refresh-family row lock serializes token rotation/replay/logout. Replay revokes the family and commits before returning 401. Every bearer-authenticated request checks the account and live session; roles come from the database. Account password/role/activation changes revoke all target sessions, and the last active ADMIN is protected against accidental removal. The bootstrap command is interactive, first-account-only, and serialized with account management by an advisory lock.
+
+Access tokens expire after five minutes by default. Refresh tokens rotate within an eight-hour absolute session, are stored as SHA-256 digests, and travel in host-only HttpOnly SameSite=Strict cookies (Secure in production). The supported browser topology is same-site HTTPS with exact CORS origins. Origin and a custom intent header protect authentication writes; refresh/logout also require an independent per-generation CSRF nonce. A reload handshake returns a fresh nonce only after the same Origin/intent checks. Frontends serialize refresh across tabs, hold access/CSRF values in memory, and clear them on authentication failure. The [frontend contract](admin-api-contract.md) specifies exact endpoints, errors, headers, cookies, and schemas.
+
+The policy control plane records immutable revisions and a successful administrative change audit in the same PostgreSQL transaction. Before commit, it installs a Redis write fence. After commit, activation compares against that exact fence, preventing an older writer from overwriting a later revision. A pending/missing policy snapshot closes managed enforcement with 503. Each request reads Redis directly; replicas have no independently cached effective configuration. In-flight requests retain their selected snapshot. Policy edits change the existing policy fingerprint, so counters start fresh and previous keys expire naturally. Environment configuration seeds revision 1 only; later effective rules come from the persisted managed policy set.
+
+Startup and an ADMIN-only reconciliation operation repair interrupted activation. PostgreSQL/Redis are not an atomic distributed datastore; Redis restores require reconciliation before traffic. Readiness detects unavailable/fenced snapshots. All protected replicas must explicitly enable managed policies and share their PostgreSQL, Redis database, and stable HMAC identity key. The Compose applications are configured accordingly. Managed APIs preserve existing protected scopes and closed modes, forbid empty/disabled/unprotected groups, validate overlapping prefixes/methods and bounded thresholds, and use expected-version updates to reject lost writes.
+
+The data APIs use explicit output schemas and bounded SQL queries, never ORM serialization of private accounts or behavioral state. Version 1 HTTP events alone contribute to monitored request, timeline, status, and route metrics; version 2 events contribute to decision/action metrics. Threat records and experimental ML retain their Phase 4 meanings. Analytics run within a repeatable-read transaction and five-second statement timeout. Client activity joins stored pseudonymous activity with bounded pipelined Redis TTL checks for current restrictions. No raw IP, request body, credential, cookie, arbitrary query value, or private profile is returned.
+
+Migration `0005_administration` adds private control-plane tables and query indexes without rewriting security events or assessments. Downgrade refuses to discard existing administrative history. Audit actors have stable UUIDs without cascading deletion, preserving history after account retirement. Audits are append-only through this HTTP API, but a PostgreSQL owner can still change rows; external tamper-evident archival is a later operational enhancement.
+
+No services or heavyweight runtime ML dependencies were added. Existing pools remain bounded, Argon2 work is limited to two concurrent hashes per administrative process (64 MiB each), pages cap at 100, time windows at 31 days, analytics alert/client lists at 20, and client detail lists at 50. Tests continue to use the existing Linux image and real PostgreSQL, Redis, RabbitMQ, worker, and protected demo service.

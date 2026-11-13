@@ -7,3 +7,5 @@ alembic>=1.14,<2
 redis>=5.2,<8
 aio-pika>=9.5,<10
 structlog>=25,<26
+argon2-cffi>=25.1,<26
+PyJWT>=2.10,<3

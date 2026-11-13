@@ -42,6 +42,13 @@ class RiskAssessment(Base):
         ),
         Index("ix_risk_assessments_severity_time", "severity", "analyzed_at"),
         Index("ix_risk_assessments_time", "analyzed_at"),
+        Index("ix_risk_assessments_client_time", "client_identifier", "analyzed_at"),
+        Index(
+            "ix_risk_assessments_evidence",
+            "evidence",
+            postgresql_using="gin",
+            postgresql_ops={"evidence": "jsonb_path_ops"},
+        ),
     )
     assessment_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
     event_id: Mapped[UUID] = mapped_column(

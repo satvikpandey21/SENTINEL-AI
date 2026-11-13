@@ -1,4 +1,4 @@
-"""Shared lifecycle and operational endpoints; no administrative business routes yet."""
+"""Shared lifecycle, operational endpoints and reusable security middleware."""
 
 from collections.abc import Callable
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -10,7 +10,9 @@ from fastapi.responses import JSONResponse
 from sentinel_security.config import Settings
 from sentinel_security.infrastructure import Resources
 from sentinel_security.logging import configure_logging
+from sentinel_security.management import PolicyCoordinator
 from sentinel_security.middleware import RequestContextMiddleware
+from sentinel_security.policy_runtime import load_effective
 from sentinel_security.protection import RedisProtectionStore, SecurityEngine
 from sentinel_security.publisher import EventPublisher
 
@@ -30,6 +32,8 @@ def create_application(
         async with AsyncExitStack() as stack:
             resources = await stack.enter_async_context(resource_factory(settings))
             app.state.resources = resources
+            if settings.dynamic_policies:
+                await PolicyCoordinator(resources, settings.effective_policies).write()
             if publisher is not None:
                 await stack.enter_async_context(publisher)
                 app.state.event_publisher = publisher
@@ -47,6 +51,7 @@ def create_application(
         redoc_url=None,
         openapi_url="/openapi.json" if settings.environment == "development" else None,
     )
+    app.state.settings = settings
     app.add_middleware(
         RequestContextMiddleware,
         trusted_proxy_cidrs=settings.trusted_proxy_cidrs,
@@ -59,6 +64,9 @@ def create_application(
                 ),
                 service,
                 settings.effective_policies,
+                policy_loader=(lambda: load_effective(app.state.resources.redis))
+                if settings.dynamic_policies
+                else None,
             )
             if settings.protection_enabled
             else None
@@ -90,6 +98,12 @@ def create_application(
     @app.get("/health/ready", tags=["operations"])
     async def ready(request: Request):
         dependencies = await request.app.state.resources.health()
+        if settings.dynamic_policies:
+            try:
+                await load_effective(request.app.state.resources.redis)
+                dependencies["policy"] = "up"
+            except Exception:
+                dependencies["policy"] = "down"
         healthy = all(state == "up" for state in dependencies.values())
         return JSONResponse(
             status_code=200 if healthy else 503,

@@ -51,6 +51,8 @@ class SecurityEventRecord(Base):
         CheckConstraint("request_id ~ '^[0-9a-f]{32}$'", name="ck_security_events_request_id"),
         CheckConstraint("client_identifier ~ '^[0-9a-f]{64}$'", name="ck_security_events_client"),
         Index("ix_security_events_time", "occurred_at"),
+        Index("ix_security_events_type_time_id", "event_type", "occurred_at", "event_id"),
+        Index("ix_security_events_endpoint_time", "endpoint", "occurred_at"),
         Index("ix_security_events_service_time", "service", "occurred_at"),
         Index("ix_security_events_severity_time", "severity", "occurred_at"),
         Index("ix_security_events_client_time", "client_identifier", "occurred_at"),

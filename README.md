@@ -1,6 +1,6 @@
 # SENTINEL AI
 
-Intelligent API Security & Threat Detection Platform. Development window: **November 12-20, 2026**. This repository implements **Phases 1-4: monitoring, distributed protection, and explainable threat analysis**. Administrative JWT and the frontend remain later milestones.
+Intelligent API Security & Threat Detection Platform. Development window: **November 12-20, 2026**. This repository implements **Phases 1-5: monitoring, distributed protection, explainable threat analysis, and secure administrative APIs**. The React frontend remains a later milestone.
 
 ## Working functionality
 
@@ -13,15 +13,17 @@ Intelligent API Security & Threat Detection Platform. Development window: **Nove
 - Atomic Redis sliding-window limits, verified-login brute-force detection, configurable observation/restriction policies, and automatically expiring blocks.
 - Hash-only development login and version 2 decision events alongside unchanged version 1 HTTP events.
 - Worker-side, transactional 0-100 risk assessments, bounded behavioral windows, robust statistical baselines, and an experimental Isolation Forest trained with Scikit-learn.
+- Argon2id administrative passwords, strict short-lived JWTs, rotating hashed refresh tokens, CSRF/Origin protection, role enforcement, account management, and persistent administrative audits.
+- Authenticated event/assessment/client APIs, real dashboard aggregates, and versioned policies activated in shared Redis with write fencing.
 - Digest-pinned service images, locked Python dependencies with artifact hashes, Ruff formatting/linting, Pytest unit/integration coverage, and CI.
 
-**Security scope:** The demo has real Redis-backed limits and temporary restrictions, a deliberately test-only login, and an isolated network boundary. Administrative APIs still expose only operational endpoints; there is no unauthenticated event-reading API. Assessments contain observed features, grouped risk contributions, rule evidence, and explicit statistical/ML availability. Experimental ML adds evidence and cannot block clients or raise risk scores. JWT administration, dashboards, WebSockets, Prometheus, and Grafana remain future work.
+**Security scope:** The demo has real Redis-backed limits and temporary restrictions, a deliberately test-only login, and an isolated network boundary. Administrative event/assessment/analytics APIs require revocable administrator or analyst sessions; policy, account, and audit operations enforce administrator permissions. Assessments contain observed features, grouped risk contributions, rule evidence, and explicit statistical/ML availability. Experimental ML adds evidence and cannot block clients or raise risk scores. React dashboard components, WebSockets, Prometheus, and Grafana remain future work. Backend dashboard analytics are implemented against PostgreSQL.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    Local[Local developer] --> Admin[Admin operational API :8000]
+    Local[Local developer] --> Admin[Authenticated admin API :8000]
     Traffic[Owned test traffic] --> Demo[Internal demo API]
     Demo --> Middleware[Reusable ASGI middleware]
     Middleware --> Engine[Policy engine]
@@ -32,7 +34,8 @@ flowchart LR
     Worker --> Analysis[Bounded features, rules, robust statistics, optional ML]
     Analysis -->|atomic audit, profile and assessment commit before acknowledgement| PG[(PostgreSQL)]
     Worker -->|confirmed quarantine| Dead[Bounded dead-letter queue]
-    Admin -. dependency checks .-> PG
+    Admin -->|bounded queries, accounts, sessions, audit and policy revisions| PG
+    Admin -->|fenced policy activation| Redis
     Migration[One-shot Alembic service] --> PG
 ```
 
@@ -54,6 +57,7 @@ Run from the repository root (PowerShell, Bash, or another shell):
 ```sh
 python scripts/init_env.py
 python scripts/configure_demo_auth.py --initialize
+python scripts/init_env.py --add-admin-key
 docker compose config --quiet
 docker compose up --build --wait --wait-timeout 180
 ```
@@ -65,6 +69,7 @@ When upgrading an existing Day 1/2 checkout, preserve `.env` and run the applica
 ```sh
 python scripts/init_env.py --add-monitoring-key
 python scripts/configure_demo_auth.py --initialize
+python scripts/init_env.py --add-admin-key
 ```
 
 The command adds only a missing or blank client-identity key and preserves existing service passwords and populated keys. Keep the generated key stable across API instances and restarts. The demo initializer stores only a salted random hash and discards its generated password. Use the interactive command below to choose a known test password, or use the repeatable verification script with ephemeral credentials.
@@ -157,7 +162,7 @@ python -m uvicorn sentinel_demo.main:create_app --factory --host 127.0.0.1 --por
 
 ## Migrations
 
-The initial revision establishes the baseline; `0002_security_events` adds the audit table; `0003_security_decisions` adds nullable decision columns, a rule/time index, and version-aware constraints while retaining v1 rows. The downgrade refuses to erase v2 audit history; archive it deliberately before downgrading. `0004_threat_analysis` adds transactional client profiles and risk assessments without changing event schemas. ORM metadata is registered in `migrations/env.py`. Generate and review subsequent migrations:
+The initial revision establishes the baseline; `0002_security_events` adds the audit table; `0003_security_decisions` adds nullable decision columns, a rule/time index, and version-aware constraints while retaining v1 rows. The downgrade refuses to erase v2 audit history; archive it deliberately before downgrading. `0004_threat_analysis` adds transactional client profiles and risk assessments without changing event schemas. `0005_administration` adds private accounts/sessions, hashed refresh tokens, administrative audit history, policy revisions, and dashboard indexes. ORM metadata is registered in `migrations/env.py`. Generate and review subsequent migrations:
 
 ```sh
 python -m alembic revision --autogenerate -m "describe schema change"
@@ -201,6 +206,7 @@ migrations/
   versions/0002_security_events.py
   versions/0003_security_decisions.py
   versions/0004_threat_analysis.py
+  versions/0005_administration.py
 models/                      # data-only experimental artifact and controlled evaluation
 scripts/                     # credentials, verification, bounded replay, analysis benchmark
 infra/rabbitmq/20-sentinel.conf
@@ -368,3 +374,31 @@ docker compose --profile test run --rm --no-deps -v ./models:/output tests pytho
 Review `models/evaluation.json` before enabling ML. Put its SHA-256 digest and the matching version in trusted `SENTINEL_ANALYSIS` configuration, mount the artifact read-only, and recreate only the worker. Missing, invalid, incompatible, disabled, or timed-out ML leaves deterministic scoring and Phase 3 enforcement functional. Models are loaded once at worker startup; training never runs in a request or consumer handler.
 
 The benchmark is synthetic-only and is **not evidence of real-world attack detection accuracy**. See [Phase 4 methodology, limitations, executed results, deployment, and exact reproduction commands](docs/day-4-verification.md).
+
+## Phase 5 administration and frontend contract
+
+See [the complete admin API contract](docs/admin-api-contract.md), [OpenAPI JSON](docs/admin-openapi.json), and [executed Phase 5 verification](docs/day-5-verification.md). All dashboard statistics come from persisted PostgreSQL records; schema 1 request totals exclude schema 2 decisions. The same shared Redis policy snapshot is read by each protected application instance.
+
+Provision the first administrator interactively after migrating and starting the stack:
+
+```sh
+python scripts/init_env.py --add-admin-key
+docker compose --profile test build
+docker compose up --wait --wait-timeout 180
+docker compose exec admin-api python -m sentinel_api.bootstrap --username your-admin-name
+```
+
+No password is printed or accepted on the command line. Bootstrap works only before any administrative account exists; later provisioning is an ADMIN-only API operation. The demo login issues no administrative access. The example environment explicitly enables local HTTP cookies; production requires HTTPS, Secure cookies, and exact frontend origins. Keep browser access/CSRF tokens in memory and use the HttpOnly rotating refresh cookie; never put tokens in localStorage.
+
+Run the complete regression suite, schema checks, OpenAPI drift check, and real HTTP acceptance demonstration:
+
+```sh
+docker compose config --quiet
+docker compose exec -T admin-api alembic check
+docker compose exec -T admin-api alembic current
+docker compose --profile test run --rm tests
+docker compose --profile test run --rm tests python scripts/verify_admin.py
+# Generate docs/admin-openapi.json with scripts/export_admin_openapi.py; CI checks drift.
+```
+
+`verify_admin.py` creates random temporary accounts, exercises actual HTTP authorization/data queries and live policy enforcement, restores the original rules, and removes its temporary accounts. It retains audit history and monitored demonstration traffic. Never run independent policy-editing demonstrations concurrently. If Redis is restored independently, reconcile the persisted policy revision before admitting traffic using the ADMIN-only `POST /api/admin/policies/reconcile` endpoint or by restarting the managed APIs.

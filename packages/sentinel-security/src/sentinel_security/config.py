@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     trusted_proxy_cidrs: tuple[str, ...] = ()
     analysis: AnalysisPolicy = Field(default_factory=AnalysisPolicy)
 
+    dynamic_policies: bool = False
     protection_enabled: bool = False
     protection_redis_timeout_seconds: float = Field(default=0.2, ge=0.01, le=2, allow_inf_nan=False)
     protection_policies: tuple[EndpointPolicy, ...] | None = None

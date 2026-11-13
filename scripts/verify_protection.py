@@ -66,6 +66,9 @@ def main() -> None:
                     "SENTINEL_DEMO_USERNAME": configuration["username"],
                     "SENTINEL_DEMO_PASSWORD_HASH": credentials.hash_password(password),
                     "SENTINEL_PROTECTION_ENABLED": "true",
+                    # This isolated legacy verification exercises temporary static rules.
+                    # The finally block restores managed enforcement and persisted policy state.
+                    "SENTINEL_DYNAMIC_POLICIES": "false",
                     "SENTINEL_PROTECTION_POLICIES": json.dumps(policies),
                 }
             }

@@ -8,6 +8,10 @@ def test_both_independently_packaged_services_start(settings, monkeypatch):
     for key in ("database_url", "redis_url", "rabbitmq_url"):
         monkeypatch.setenv(f"SENTINEL_{key.upper()}", getattr(settings, key).get_secret_value())
     monkeypatch.setenv("SENTINEL_ENVIRONMENT", "test")
+    import secrets
+
+    monkeypatch.setenv("SENTINEL_ADMIN_SIGNING_KEY", secrets.token_hex(32))
+    monkeypatch.setenv("SENTINEL_DYNAMIC_POLICIES", "false")
     for factory, service in (
         (create_admin_app, "sentinel-admin-api"),
         (create_demo_app, "sentinel-demo-api"),

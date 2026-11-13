@@ -66,3 +66,22 @@ def test_existing_identity_key_is_stable_across_upgrades(tmp_path, monkeypatch):
     (tmp_path / ".env").write_text(existing)
     init_env.main()
     assert (tmp_path / ".env").read_text() == existing
+
+
+@pytest.mark.parametrize("existing", ["", "SENTINEL_ADMIN_SIGNING_KEY=\n"])
+def test_admin_key_upgrade_is_independent_and_preserves_credentials(
+    tmp_path, monkeypatch, existing
+):
+    monkeypatch.setattr(init_env, "ROOT", tmp_path)
+    monkeypatch.setattr("sys.argv", ["init_env.py", "--add-admin-key"])
+    baseline = "POSTGRES_PASSWORD=preserved-db\nSENTINEL_CLIENT_IDENTITY_KEY=" + "a" * 64 + "\n"
+    (tmp_path / ".env").write_text(baseline + existing)
+    init_env.main()
+    value = (tmp_path / ".env").read_text()
+    assert value.startswith(baseline)
+    settings = dict(line.split("=", 1) for line in value.splitlines())
+    assert len(settings["SENTINEL_ADMIN_SIGNING_KEY"]) == 64
+    assert settings["SENTINEL_ADMIN_SIGNING_KEY"] != settings["SENTINEL_CLIENT_IDENTITY_KEY"]
+    init_env.main()
+    assert (tmp_path / ".env").read_text() == value
+    assert not (tmp_path / ".env.admin.tmp").exists()

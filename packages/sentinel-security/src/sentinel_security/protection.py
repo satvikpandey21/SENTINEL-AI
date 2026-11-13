@@ -16,6 +16,7 @@ from starlette.types import Scope
 
 from sentinel_security.events import record_authentication_outcome
 from sentinel_security.policies import EndpointPolicy
+from sentinel_security.policy_runtime import PolicyUnavailable
 
 
 @dataclass(frozen=True)
@@ -52,19 +53,28 @@ class RedisProtectionStore:
 
 class SecurityEngine:
     def __init__(
-        self, store: RedisProtectionStore, service: str, policies: tuple[EndpointPolicy, ...]
+        self,
+        store: RedisProtectionStore,
+        service: str,
+        policies: tuple[EndpointPolicy, ...],
+        policy_loader=None,
     ):
+        self.policy_loader = policy_loader
         self.store = store
         self.service_hash = hashlib.sha256(service.encode()).hexdigest()[:16]
         self.policies = tuple(
             sorted(policies, key=lambda policy: len(policy.path_prefix), reverse=True)
         )
 
-    def policy_for(self, scope: Scope) -> EndpointPolicy | None:
+    def policy_for(self, scope: Scope, policies=None) -> EndpointPolicy | None:
         return next(
             (
                 policy
-                for policy in self.policies
+                for policy in (
+                    self.policies
+                    if policies is None
+                    else sorted(policies, key=lambda p: len(p.path_prefix), reverse=True)
+                )
                 if policy.matches(scope.get("path", ""), scope["method"])
             ),
             None,
@@ -128,7 +138,18 @@ class SecurityEngine:
         )
 
     async def before_request(self, scope: Scope, identity: str) -> Decision:
-        policy = self.policy_for(scope)
+        try:
+            policies = await self.policy_loader() if self.policy_loader is not None else None
+        except (PolicyUnavailable, RedisError, OSError, TimeoutError):
+            return Decision(
+                action="deny",
+                rule_id="policy.unavailable",
+                response_status=503,
+                retry_after_seconds=1,
+                degraded=True,
+            )
+        policy = self.policy_for(scope, policies)
+        scope.setdefault("state", {})["sentinel_effective_policy"] = policy
         if (
             policy is None
             or not policy.enabled
@@ -154,7 +175,7 @@ class SecurityEngine:
             return self.degraded(policy, error)
 
     async def after_authentication(self, scope: Scope, identity: str) -> Decision:
-        policy = self.policy_for(scope)
+        policy = scope.get("state", {}).get("sentinel_effective_policy", self.policy_for(scope))
         outcome = scope.get("state", {}).get("sentinel_verified_login")
         if (
             policy is None
