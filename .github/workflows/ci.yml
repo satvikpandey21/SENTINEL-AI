@@ -14,7 +14,7 @@ jobs:
       - run: pip install --require-hashes -r requirements-dev.txt
       - run: pip install --no-deps -e packages/sentinel-security -e apps/admin-api -e apps/demo-api -e apps/event-worker
       - run: ruff check . && ruff format --check .
-      - run: pytest -m 'not integration' --cov=sentinel_security --cov=sentinel_api --cov=sentinel_demo --cov=sentinel_worker --cov-report=term-missing --cov-fail-under=85
+      - run: python -m pytest -m 'not integration' --cov=sentinel_security --cov=sentinel_api --cov=sentinel_demo --cov=sentinel_worker --cov-report=term-missing --cov-fail-under=85
       - run: python scripts/init_env.py
       - run: python scripts/configure_demo_auth.py --initialize
       - run: docker compose config --quiet
