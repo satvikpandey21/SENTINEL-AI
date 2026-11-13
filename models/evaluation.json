@@ -1,0 +1,78 @@
+{
+  "scope": "synthetic controlled anomaly benchmark; not validated attack classification",
+  "training": {
+    "normal_windows": 512,
+    "seed": 4101
+  },
+  "calibration": {
+    "normal_windows": 128,
+    "seed": 4102,
+    "quantile": 0.99
+  },
+  "evaluation": {
+    "normal_windows": 256,
+    "anomalous_windows": 192,
+    "true_negative": 256,
+    "false_positive": 0,
+    "true_positive": 66,
+    "false_negative": 126
+  },
+  "benign_shift": {
+    "windows": 128,
+    "false_positive": 0
+  },
+  "anomaly_breakdown": {
+    "burst": {
+      "windows": 64,
+      "flagged": 0
+    },
+    "auth": {
+      "windows": 64,
+      "flagged": 64
+    },
+    "scan": {
+      "windows": 64,
+      "flagged": 2
+    }
+  },
+  "dataset_sha256": {
+    "training": "f9faefef9db87b81cedd90c0ce3aab148345afd0b888827084fe3b360a2aff32",
+    "calibration": "6f4d05a9e8aab5b4f7b172008df6e781845674fc4e484d26c955587c94d928f3",
+    "evaluation_normal": "6cc723947f2514c854f15712587c37320906a4d124d9daed341947630a54699e",
+    "evaluation_anomalous": "b22a08aaf13cf2470afe53bbdf7a3596a43383ea47deae13ffe886c1e2f163c4",
+    "benign_shift": "7e0dbdeb19767da6f5fb41b021ed0ede491019f4a6e6896cd4a8cef9e47f0427"
+  },
+  "threshold": 0.66071370038221,
+  "max_sklearn_export_error": 0.0,
+  "model_sha256": "eb60fa1453ffdc183e226dfd72f41ca84be36ec524947d27af1ac3d1b561eef8",
+  "sklearn_version": "1.8.0",
+  "feature_schema": "behavior-v1",
+  "features": [
+    "request_count",
+    "error_rate",
+    "auth_failure_rate",
+    "rate_violation_rate",
+    "endpoint_entropy",
+    "mean_interval",
+    "timing_cv",
+    "sensitive_fraction"
+  ],
+  "sample_inference": {
+    "normal": {
+      "status": "ready",
+      "anomaly_score": 0.445305364778008,
+      "anomalous": false,
+      "threshold": 0.66071370038221,
+      "model_version": "experimental-iforest-v1",
+      "experimental": true
+    },
+    "burst": {
+      "status": "ready",
+      "anomaly_score": 0.46291503604807627,
+      "anomalous": false,
+      "threshold": 0.66071370038221,
+      "model_version": "experimental-iforest-v1",
+      "experimental": true
+    }
+  }
+}

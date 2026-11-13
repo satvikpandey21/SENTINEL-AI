@@ -10,16 +10,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: pip
-      - run: pip install --require-hashes -r requirements-dev.txt
-      - run: pip install --no-deps -e packages/sentinel-security -e apps/admin-api -e apps/demo-api -e apps/event-worker
-      - run: ruff check . && ruff format --check .
-      - run: python -m pytest -m 'not integration' --cov=sentinel_security --cov=sentinel_api --cov=sentinel_demo --cov=sentinel_worker --cov-report=term-missing --cov-fail-under=85
       - run: python scripts/init_env.py
       - run: python scripts/configure_demo_auth.py --initialize
       - run: docker compose config --quiet
-      - run: docker compose up --build --wait --wait-timeout 180
-      - run: docker compose --profile test run --build --rm tests
+      - run: docker compose --profile test build
+      - run: docker run --rm -v "$PWD:/workspace:ro" -w /workspace sentinel-ai-tests python -m ruff check --no-cache .
+      - run: docker run --rm -v "$PWD:/workspace:ro" -w /workspace sentinel-ai-tests python -m ruff format --no-cache --check .
+      - run: docker compose up --wait --wait-timeout 180
+      - run: docker compose exec -T admin-api alembic check
+      - run: docker compose --profile test run --rm tests
+      - run: mkdir -p .artifacts && docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/.artifacts:/output" sentinel-ai-tests python -m sentinel_security.model_training --output /output
+      - uses: actions/upload-artifact@v4
+        with:
+          name: experimental-model-evaluation
+          path: .artifacts/evaluation.json
       - if: failure()
         run: docker compose logs --tail=100
       - if: always()

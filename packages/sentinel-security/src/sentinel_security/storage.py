@@ -88,8 +88,9 @@ class SecurityEventRecord(Base):
 
 
 class EventStore:
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession], analysis=None) -> None:
         self.sessions = sessions
+        self.analysis = analysis
 
     async def persist(self, event: MonitoringEvent) -> bool:
         statement = (
@@ -101,5 +102,7 @@ class EventStore:
         async with self.sessions() as session, session.begin():
             result = await session.execute(statement)
             inserted = result.scalar_one_or_none() is not None
+            if inserted and self.analysis is not None and self.analysis.policy.enabled:
+                await self.analysis.analyze(session, event)
         # The transaction has committed before the caller can acknowledge the broker message.
         return inserted

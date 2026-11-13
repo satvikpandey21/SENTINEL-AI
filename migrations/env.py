@@ -4,6 +4,7 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from sentinel_security.analysis_storage import AnalysisState, RiskAssessment  # noqa: F401
 from sentinel_security.config import Settings
 from sentinel_security.database import Base
 from sentinel_security.storage import SecurityEventRecord  # noqa: F401 - register audit metadata

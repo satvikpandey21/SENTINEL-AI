@@ -141,6 +141,11 @@ services:
 
   event-worker:
     <<: *app
+    environment:
+      <<: *app-environment
+      SENTINEL_ANALYSIS: ${SENTINEL_ANALYSIS:-{}}
+    volumes:
+      - ./models:/app/models:ro
     command: [python, -m, sentinel_worker]
     healthcheck:
       test: [CMD, python, -m, sentinel_worker.healthcheck]
@@ -162,7 +167,13 @@ services:
     environment:
       <<: *app-environment
       SENTINEL_RUN_INTEGRATION: "1"
+      COVERAGE_FILE: /tmp/.coverage
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
     networks: [backend]
+    volumes:
+      - ./models:/app/models:ro
     depends_on:
       admin-api:
         condition: service_healthy
@@ -170,7 +181,7 @@ services:
         condition: service_healthy
       event-worker:
         condition: service_healthy
-    command: [python, -m, pytest, -p, 'no:cacheprovider', -m, integration, -q]
+    command: [python, -m, pytest, -p, 'no:cacheprovider', --cov=sentinel_security, --cov=sentinel_api, --cov=sentinel_demo, --cov=sentinel_worker, --cov-report=term-missing, --cov-fail-under=85, -q]
 
 networks:
   backend:

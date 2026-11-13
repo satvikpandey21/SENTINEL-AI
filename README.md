@@ -1,6 +1,6 @@
 # SENTINEL AI
 
-Intelligent API Security & Threat Detection Platform. Development window: **November 12-20, 2026**. This repository implements the **Day 1/2 foundation and monitoring plus Phase 3 distributed protection**. Administrative JWT, the dashboard, and advanced ML remain later milestones.
+Intelligent API Security & Threat Detection Platform. Development window: **November 12-20, 2026**. This repository implements **Phases 1-4: monitoring, distributed protection, and explainable threat analysis**. Administrative JWT and the frontend remain later milestones.
 
 ## Working functionality
 
@@ -12,9 +12,10 @@ Intelligent API Security & Threat Detection Platform. Development window: **Nove
 - Versioned request/response metadata, a bounded asynchronous publisher, durable RabbitMQ queues, idempotent PostgreSQL storage, retry handling, and redacted dead letters.
 - Atomic Redis sliding-window limits, verified-login brute-force detection, configurable observation/restriction policies, and automatically expiring blocks.
 - Hash-only development login and version 2 decision events alongside unchanged version 1 HTTP events.
+- Worker-side, transactional 0-100 risk assessments, bounded behavioral windows, robust statistical baselines, and an experimental Isolation Forest trained with Scikit-learn.
 - Digest-pinned service images, locked Python dependencies with artifact hashes, Ruff formatting/linting, Pytest unit/integration coverage, and CI.
 
-**Security scope:** The demo has real Redis-backed limits and temporary restrictions, a deliberately test-only login, and an isolated network boundary. Administrative APIs still expose only operational endpoints; there is no unauthenticated event-reading API. Severity and rule counters explain deterministic decisions; no ML risk score is fabricated. JWT administration, advanced detection, dashboards, WebSockets, Prometheus, and Grafana remain future work.
+**Security scope:** The demo has real Redis-backed limits and temporary restrictions, a deliberately test-only login, and an isolated network boundary. Administrative APIs still expose only operational endpoints; there is no unauthenticated event-reading API. Assessments contain observed features, grouped risk contributions, rule evidence, and explicit statistical/ML availability. Experimental ML adds evidence and cannot block clients or raise risk scores. JWT administration, dashboards, WebSockets, Prometheus, and Grafana remain future work.
 
 ## Architecture
 
@@ -28,7 +29,8 @@ flowchart LR
     Middleware --> Buffer[Bounded in-memory publisher buffer]
     Buffer -->|persistent messages and confirms| MQ[Durable RabbitMQ event queue]
     MQ --> Worker[Event worker]
-    Worker -->|commit before acknowledgement| PG[(PostgreSQL audit events)]
+    Worker --> Analysis[Bounded features, rules, robust statistics, optional ML]
+    Analysis -->|atomic audit, profile and assessment commit before acknowledgement| PG[(PostgreSQL)]
     Worker -->|confirmed quarantine| Dead[Bounded dead-letter queue]
     Admin -. dependency checks .-> PG
     Migration[One-shot Alembic service] --> PG
@@ -127,7 +129,7 @@ To run the full unit suite inside Linux (also useful when Windows Application Co
 docker compose --profile test run --build --rm --no-deps -e COVERAGE_FILE=/tmp/.coverage tests python -m pytest -p no:cacheprovider -m "not integration" --cov=sentinel_security --cov=sentinel_api --cov=sentinel_demo --cov=sentinel_worker --cov-report=term-missing --cov-fail-under=85
 ```
 
-The integration suite retains Day 1/2 checks and verifies real Redis atomicity, shared limits across two demo instances, client isolation, verified-login restrictions, expiry, failure policies, v1/v2 compatibility, event persistence, and sensitive-data exclusions. Integration tests are explicitly enabled in the container; a bare `pytest` skips them. Host-based unit tests require no running infrastructure. The container unit command uses `--no-deps` and needs only the built test image. GitHub Actions runs lint, unit coverage, Compose startup, and the container integration suite.
+The integration suite retains Day 1/2 checks and verifies real Redis atomicity, shared limits across two demo instances, client isolation, verified-login restrictions, expiry, failure policies, v1/v2 compatibility, event persistence, and sensitive-data exclusions. Integration tests are explicitly enabled in the container; a bare `pytest` skips them. Host-based unit tests require no running infrastructure. The container unit command uses `--no-deps` and needs only the built test image. GitHub Actions runs lint, formatting, the complete unit/integration suite with coverage, migration drift checks, and reproducible offline model training through Docker. The default Compose test command runs the complete suite.
 
 Format code with `python -m ruff format .`. Update dependencies intentionally and commit both inputs and lock files:
 
@@ -155,7 +157,7 @@ python -m uvicorn sentinel_demo.main:create_app --factory --host 127.0.0.1 --por
 
 ## Migrations
 
-The initial revision establishes the baseline; `0002_security_events` adds the audit table; `0003_security_decisions` adds nullable decision columns, a rule/time index, and version-aware constraints while retaining v1 rows. The downgrade refuses to erase v2 audit history; archive it deliberately before downgrading. ORM metadata is registered in `migrations/env.py`. Generate and review subsequent migrations:
+The initial revision establishes the baseline; `0002_security_events` adds the audit table; `0003_security_decisions` adds nullable decision columns, a rule/time index, and version-aware constraints while retaining v1 rows. The downgrade refuses to erase v2 audit history; archive it deliberately before downgrading. `0004_threat_analysis` adds transactional client profiles and risk assessments without changing event schemas. ORM metadata is registered in `migrations/env.py`. Generate and review subsequent migrations:
 
 ```sh
 python -m alembic revision --autogenerate -m "describe schema change"
@@ -198,7 +200,9 @@ migrations/
   versions/0001_baseline.py
   versions/0002_security_events.py
   versions/0003_security_decisions.py
-scripts/                     # credentials, persistence verification, bounded replay
+  versions/0004_threat_analysis.py
+models/                      # data-only experimental artifact and controlled evaluation
+scripts/                     # credentials, verification, bounded replay, analysis benchmark
 infra/rabbitmq/20-sentinel.conf
 tests/
   unit/
@@ -216,12 +220,13 @@ alembic.ini
 uvicorn-log.json
 pyproject.toml
 requirements{,-dev}.{in,txt}
+requirements-ml.in           # offline training/test inputs
 .env.example
 ```
 
-The frontend, advanced ML/statistical detection, and Prometheus/Grafana remain future milestones. No fake detections, synthetic production audit rows, or unused machine-learning dependencies are included.
+The frontend and Prometheus/Grafana remain future milestones. Production assessments use observed telemetry. Synthetic data is confined to the explicitly experimental offline ML benchmark; training dependencies are excluded from runtime images.
 
-See the historical [Day 1 verification record](docs/day-1-verification.md) and [Day 2 verification record](docs/day-2-verification.md) and current [Phase 3 verification record](docs/day-3-verification.md) for executed checks and the Windows native-extension limitation.
+See the historical [Day 1 verification record](docs/day-1-verification.md) and [Day 2 verification record](docs/day-2-verification.md) and [Phase 3 verification record](docs/day-3-verification.md) and current [Phase 4 verification record](docs/day-4-verification.md) for executed checks and the Windows native-extension limitation.
 
 ## Monitoring contract and limits
 
@@ -343,3 +348,23 @@ Redis is the only synchronous protection dependency. Ordinary groups fail open w
 Version 1 `http.request.completed` events remain unchanged. Version 2 `security.decision` events add rule ID, action, threshold/counter/window, retry/expiry, and degradation metadata; there are no ML scores. The worker, quarantine envelope, and replay CLI accept both versions. The existing queue name remains a compatible transport contract; deploy the migration and upgraded worker before enabling v2-producing API instances during a rolling deployment. Decision severity is warning for rule observations/restrictions and error for fail-closed unavailability. No event-reading administrative API is exposed.
 
 The Redis image was updated within the existing 7.4 line to a verified **7.4.12** digest before enabling Lua enforcement, retaining the named volume. Redis's [7.4 security release notes](https://redis.io/docs/latest/operate/oss_and_stack/stack-with-enterprise/release-notes/redisce/redisce-7.4-release-notes/) document Lua security fixes absent from the previous 7.4.5 image.
+
+
+## Phase 4 threat analysis
+
+The event worker atomically commits each new audit event, its bounded client profile, and an explainable risk assessment. Duplicate deliveries update nothing. PostgreSQL row locks serialize the same service/HMAC identity across workers. RabbitMQ retries and quarantine cover the complete transaction. Analysis emits no broker events, so it cannot trigger itself. Redis protection remains independent.
+
+Defaults use 60-second UTC tumbling windows, at most 2,048 distinct requests per client window, 32 numeric baseline summaries, and an eight-window statistical warm-up. Late events remain auditable with explicit status. Capacity exhaustion reports lower-bound counts and suppresses statistical/ML claims. The worker cleans at most 500 expired profiles and 500 assessments per minute; operators must monitor retention backlog. Existing audit history keeps its previous retention contract.
+
+`SENTINEL_ANALYSIS` is a worker-only JSON `AnalysisPolicy`; it validates weights, severity thresholds, windows, baseline size, retention, and model settings. ML defaults to disabled. Its bounded JSON tree evaluator has no scientific-library runtime dependency. To train and evaluate the experimental detector using Docker:
+
+```sh
+docker compose --profile test build
+docker compose --profile test run --rm tests
+docker compose exec -T admin-api alembic check
+docker compose --profile test run --rm --no-deps -v ./models:/output tests python -m sentinel_security.model_training --output /output
+```
+
+Review `models/evaluation.json` before enabling ML. Put its SHA-256 digest and the matching version in trusted `SENTINEL_ANALYSIS` configuration, mount the artifact read-only, and recreate only the worker. Missing, invalid, incompatible, disabled, or timed-out ML leaves deterministic scoring and Phase 3 enforcement functional. Models are loaded once at worker startup; training never runs in a request or consumer handler.
+
+The benchmark is synthetic-only and is **not evidence of real-world attack detection accuracy**. See [Phase 4 methodology, limitations, executed results, deployment, and exact reproduction commands](docs/day-4-verification.md).

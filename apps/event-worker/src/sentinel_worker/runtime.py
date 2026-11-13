@@ -1,10 +1,12 @@
 """Reconnect supervisor with bounded prefetch, safe shutdown, and independent DB health."""
 
 import asyncio
+from time import monotonic
 
 import aio_pika
 import structlog
 
+from sentinel_security.analysis_storage import AnalysisEngine, cleanup_analysis
 from sentinel_security.config import Settings
 from sentinel_security.infrastructure import Resources
 from sentinel_security.messaging import declare_topology
@@ -14,12 +16,20 @@ from sentinel_worker.healthcheck import write_health
 
 
 async def heartbeat(resources: Resources, stop: asyncio.Event) -> None:
+    next_cleanup = monotonic() + 60
     while not stop.is_set():
         ready = False
         try:
             async with asyncio.timeout(resources.settings.dependency_timeout_seconds):
                 await resources._postgresql()
             ready = True
+            if monotonic() >= next_cleanup:
+                async with asyncio.timeout(resources.settings.worker_storage_timeout_seconds):
+                    removed = await cleanup_analysis(
+                        resources.session_factory, resources.settings.analysis
+                    )
+                structlog.get_logger().info("analysis_retention", removed=removed)
+                next_cleanup = monotonic() + 60
         except Exception as error:
             structlog.get_logger().warning(
                 "worker_database_unavailable", error_type=type(error).__name__
@@ -43,7 +53,9 @@ async def consume_connection(connection, resources: Resources, stop: asyncio.Eve
         channel = await connection.channel(publisher_confirms=True, on_return_raises=True)
         await channel.set_qos(prefetch_count=settings.worker_prefetch)
         queue = await declare_topology(channel, settings)
-    consumer = EventConsumer(EventStore(resources.session_factory), channel, settings)
+    consumer = EventConsumer(
+        EventStore(resources.session_factory, resources.analysis), channel, settings
+    )
     consume_task = asyncio.create_task(consume(queue, consumer))
     health_task = asyncio.create_task(heartbeat(resources, stop))
     stop_task = asyncio.create_task(stop.wait())
@@ -66,6 +78,7 @@ async def consume_connection(connection, resources: Resources, stop: asyncio.Eve
 async def run_worker(settings: Settings, stop: asyncio.Event) -> None:
     write_health(False)
     async with Resources(settings) as resources:
+        resources.analysis = AnalysisEngine(settings.analysis)
         while not stop.is_set():
             connection = None
             try:

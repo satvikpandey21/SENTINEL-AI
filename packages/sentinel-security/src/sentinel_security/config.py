@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from sentinel_security.analysis_config import AnalysisPolicy
 from sentinel_security.policies import EndpointPolicy, default_policies, validate_policies
 
 
@@ -24,6 +25,7 @@ class Settings(BaseSettings):
     database_pool_size: int = Field(default=5, ge=1, le=50)
     database_max_overflow: int = Field(default=5, ge=0, le=50)
     trusted_proxy_cidrs: tuple[str, ...] = ()
+    analysis: AnalysisPolicy = Field(default_factory=AnalysisPolicy)
 
     protection_enabled: bool = False
     protection_redis_timeout_seconds: float = Field(default=0.2, ge=0.01, le=2, allow_inf_nan=False)

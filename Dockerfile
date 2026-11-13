@@ -29,7 +29,7 @@ COPY uvicorn-log.json ./
 FROM runtime AS test
 USER root
 COPY requirements-dev.txt ./
-RUN pip install --require-hashes -r requirements-dev.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install --require-hashes -r requirements-dev.txt
 COPY tests ./tests
 COPY scripts ./scripts
 COPY pyproject.toml ./
