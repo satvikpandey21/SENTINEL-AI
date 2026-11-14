@@ -10,6 +10,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
+      - run: npm ci
+        working-directory: apps/dashboard
+      - run: npm run api:check && npm run format:check && npm run lint && npm run typecheck
+        working-directory: apps/dashboard
+      - run: npm run test:coverage && npm run build
+        working-directory: apps/dashboard
       - run: python scripts/init_env.py
       - run: python scripts/configure_demo_auth.py --initialize
       - run: python scripts/init_env.py --add-admin-key
@@ -22,6 +33,16 @@ jobs:
       - run: docker compose exec -T admin-api alembic check
       - run: docker compose --profile test run --rm tests
       - run: docker compose --profile test run --rm tests python scripts/verify_admin.py
+      - run: npx playwright install --with-deps chromium
+        working-directory: apps/dashboard
+      - run: npm run test:integration
+        working-directory: apps/dashboard
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-coverage-and-build
+          path: |
+            apps/dashboard/coverage
+            apps/dashboard/dist
       - run: mkdir -p .artifacts && docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/.artifacts:/output" sentinel-ai-tests python -m sentinel_security.model_training --output /output
       - uses: actions/upload-artifact@v4
         with:

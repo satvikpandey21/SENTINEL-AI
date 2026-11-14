@@ -1,0 +1,11 @@
+import { createRoot } from 'react-dom/client';
+import App from './App';
+import { API_BASE } from './api/config';
+import { HttpClient } from './api/http';
+import { Session } from './auth/session';
+import './styles/tokens.css';
+import './styles/app.css';
+const session = new Session(new HttpClient(API_BASE));
+const root = document.getElementById('root');
+if (!root) throw new Error('Application root is missing');
+createRoot(root).render(<App session={session} />);

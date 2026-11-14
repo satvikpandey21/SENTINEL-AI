@@ -20,7 +20,7 @@ coverage.xml
 build/
 dist/
 
-# Frontend (introduced in a later milestone)
+# Frontend
 node_modules/
 coverage/
 *.tsbuildinfo

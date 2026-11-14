@@ -73,7 +73,9 @@ def monitored(settings):
     return app, sink
 
 
-def test_success_metadata_and_sensitive_data_exclusion(monitored):
+def test_success_metadata_and_sensitive_data_exclusion(monitored, monkeypatch):
+    clock = iter((100.0, 100.0125))
+    monkeypatch.setattr("sentinel_security.middleware.perf_counter", lambda: next(clock))
     app, sink = monitored
     with TestClient(app) as client:
         response = client.post(
@@ -92,7 +94,7 @@ def test_success_metadata_and_sensitive_data_exclusion(monitored):
     assert event.request_id == response.headers["X-Request-ID"]
     assert event.service == "test-service"
     assert event.endpoint == "/items/{item_id}"
-    assert event.duration_ms >= 5
+    assert event.duration_ms == 12.5
     assert event.response_completed
     assert event.authentication_outcome == "not_provided"
     assert event.severity == "info"

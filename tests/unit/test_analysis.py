@@ -381,3 +381,21 @@ def test_ml_invalid_features_and_oversized_artifact(tmp_path, trained):
         ).status
         == "invalid_artifact"
     )
+
+
+def test_offline_evaluation_retries_scheduler_timeout_without_changing_worker_budget(monkeypatch):
+    original = AnomalyModel.infer
+    calls = 0
+
+    def transient_timeout(self, features, *, complete_window):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"status": "timeout"}
+        return original(self, features, complete_window=complete_window)
+
+    monkeypatch.setattr(AnomalyModel, "infer", transient_timeout)
+    _, report = train_and_evaluate()
+    assert report["max_sklearn_export_error"] < 1e-12
+    assert calls > 1
+    assert AnalysisPolicy().inference_budget_ms == 10

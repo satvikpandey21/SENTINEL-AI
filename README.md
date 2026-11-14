@@ -1,6 +1,6 @@
 # SENTINEL AI
 
-Intelligent API Security & Threat Detection Platform. Development window: **November 12-20, 2026**. This repository implements **Phases 1-5: monitoring, distributed protection, explainable threat analysis, and secure administrative APIs**. The React frontend remains a later milestone.
+Intelligent API Security & Threat Detection Platform. Development window: **November 12-20, 2026**. This repository implements **Phases 1-6: monitoring, distributed protection, explainable threat analysis, secure administrative APIs, and a React security dashboard**.
 
 ## Working functionality
 
@@ -17,7 +17,7 @@ Intelligent API Security & Threat Detection Platform. Development window: **Nove
 - Authenticated event/assessment/client APIs, real dashboard aggregates, and versioned policies activated in shared Redis with write fencing.
 - Digest-pinned service images, locked Python dependencies with artifact hashes, Ruff formatting/linting, Pytest unit/integration coverage, and CI.
 
-**Security scope:** The demo has real Redis-backed limits and temporary restrictions, a deliberately test-only login, and an isolated network boundary. Administrative event/assessment/analytics APIs require revocable administrator or analyst sessions; policy, account, and audit operations enforce administrator permissions. Assessments contain observed features, grouped risk contributions, rule evidence, and explicit statistical/ML availability. Experimental ML adds evidence and cannot block clients or raise risk scores. React dashboard components, WebSockets, Prometheus, and Grafana remain future work. Backend dashboard analytics are implemented against PostgreSQL.
+**Security scope:** The demo has real Redis-backed limits and temporary restrictions, a deliberately test-only login, and an isolated network boundary. Administrative event/assessment/analytics APIs require revocable administrator or analyst sessions; policy, account, and audit operations enforce administrator permissions. Assessments contain observed features, grouped risk contributions, rule evidence, and explicit statistical/ML availability. Experimental ML adds evidence and cannot block clients or raise risk scores. The React dashboard uses the authenticated APIs. WebSockets, Prometheus, and Grafana remain future work. Backend dashboard analytics are implemented against PostgreSQL.
 
 ## Architecture
 
@@ -47,7 +47,7 @@ Middleware runs bounded asynchronous Redis checks, then offers validated HTTP/de
 
 - Docker Engine/Desktop using **Linux containers**, and Docker Compose v2+.
 - Python **3.11** for local development and environment initialization.
-- Git. No Node or frontend dependencies are required for this milestone.
+- Git. The optional dashboard requires Node.js 22.12+ (Node 24 used for verification) and npm.
 - Free localhost port 8000. The optional development override also uses 8001, 5432, 6379, 5672, and 15672.
 
 ## Start the complete stack
@@ -117,7 +117,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --no-deps -e packages/sentinel-security -e apps/admin-api -e apps/demo-api -e apps/event-worker
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m ruff format --check .
-.\.venv\Scripts\python.exe -m pytest -m "not integration" --cov=sentinel_security --cov=sentinel_api --cov=sentinel_demo --cov=sentinel_worker --cov-report=term-missing --cov-fail-under=85
+.\.venv\Scripts\python.exe -m pytest -m "not integration"
 ```
 
 On Linux/macOS substitute `.venv/bin/python` for `.\.venv\Scripts\python.exe`. Package build isolation downloads pinned setuptools when initially installing the three local packages. Runtime and test dependencies are pinned and hash-checked.
@@ -131,10 +131,10 @@ docker compose --profile test run --build --rm tests
 To run the full unit suite inside Linux (also useful when Windows Application Control blocks native Python extensions):
 
 ```sh
-docker compose --profile test run --build --rm --no-deps -e COVERAGE_FILE=/tmp/.coverage tests python -m pytest -p no:cacheprovider -m "not integration" --cov=sentinel_security --cov=sentinel_api --cov=sentinel_demo --cov=sentinel_worker --cov-report=term-missing --cov-fail-under=85
+docker compose --profile test run --build --rm --no-deps -e COVERAGE_FILE=/tmp/.coverage tests python -m pytest -p no:cacheprovider -m "not integration"
 ```
 
-The integration suite retains Day 1/2 checks and verifies real Redis atomicity, shared limits across two demo instances, client isolation, verified-login restrictions, expiry, failure policies, v1/v2 compatibility, event persistence, and sensitive-data exclusions. Integration tests are explicitly enabled in the container; a bare `pytest` skips them. Host-based unit tests require no running infrastructure. The container unit command uses `--no-deps` and needs only the built test image. GitHub Actions runs lint, formatting, the complete unit/integration suite with coverage, migration drift checks, and reproducible offline model training through Docker. The default Compose test command runs the complete suite.
+The integration suite retains Day 1/2 checks and verifies real Redis atomicity, shared limits across two demo instances, client isolation, verified-login restrictions, expiry, failure policies, v1/v2 compatibility, event persistence, and sensitive-data exclusions. Integration tests are explicitly enabled in the container; a bare `pytest` skips them. Host-based unit tests require no running infrastructure. The container unit command uses `--no-deps` and needs only the built test image. GitHub Actions runs lint, formatting, the complete unit/integration suite with coverage, migration drift checks, and reproducible offline model training through Docker. The default Compose test command runs the complete suite and enforces 85% aggregate coverage; unit-only runs intentionally omit integration-only coverage.
 
 Format code with `python -m ruff format .`. Update dependencies intentionally and commit both inputs and lock files:
 
@@ -199,6 +199,7 @@ apps/
   admin-api/                 # independent sentinel_api distribution
   demo-api/                  # independent sentinel_demo distribution
   event-worker/              # independent sentinel_worker distribution
+  dashboard/                 # React + TypeScript + Vite administration UI
 packages/
   sentinel-security/         # reusable sentinel_security distribution
 migrations/
@@ -230,7 +231,7 @@ requirements-ml.in           # offline training/test inputs
 .env.example
 ```
 
-The frontend and Prometheus/Grafana remain future milestones. Production assessments use observed telemetry. Synthetic data is confined to the explicitly experimental offline ML benchmark; training dependencies are excluded from runtime images.
+WebSockets and Prometheus/Grafana remain future milestones. Production assessments use observed telemetry. Synthetic data is confined to the explicitly experimental offline ML benchmark; training dependencies are excluded from runtime images.
 
 See the historical [Day 1 verification record](docs/day-1-verification.md) and [Day 2 verification record](docs/day-2-verification.md) and [Phase 3 verification record](docs/day-3-verification.md) and current [Phase 4 verification record](docs/day-4-verification.md) for executed checks and the Windows native-extension limitation.
 
@@ -402,3 +403,72 @@ docker compose --profile test run --rm tests python scripts/verify_admin.py
 ```
 
 `verify_admin.py` creates random temporary accounts, exercises actual HTTP authorization/data queries and live policy enforcement, restores the original rules, and removes its temporary accounts. It retains audit history and monitored demonstration traffic. Never run independent policy-editing demonstrations concurrently. If Redis is restored independently, reconcile the persisted policy revision before admitting traffic using the ADMIN-only `POST /api/admin/policies/reconcile` endpoint or by restarting the managed APIs.
+
+
+## Phase 6 security dashboard
+
+The dashboard in `apps/dashboard` uses generated OpenAPI types, a centralized HTTP client,
+in-memory access credentials, rotating HttpOnly refresh cookies, role-aware routes, and
+real backend queries. Pages cover Overview, Events, Threat Intelligence, Client
+Investigation, Protection Policies, ADMIN-only Audit Logs, and Profile/Settings with
+ADMIN account management. See [Phase 6 architecture and executed verification](docs/day-6-verification.md).
+
+Keep the existing `.env` and start the backend from the repository root:
+
+```powershell
+docker compose up --build --wait --wait-timeout 180
+# Only if no administrative account has been provisioned:
+docker compose exec admin-api python -m sentinel_api.bootstrap --username your-admin-name
+```
+
+In a second terminal from the repository root:
+
+```powershell
+cd apps/dashboard
+npm.cmd ci
+npm.cmd run dev
+```
+
+Open **http://localhost:5173**. `npm.cmd` works with PowerShell script execution disabled;
+Bash users can use `npm`. The default Vite proxy forwards `/api/admin` to
+`http://127.0.0.1:8000` and preserves the browser Origin. The backend must explicitly allow
+`http://localhost:5173` in `SENTINEL_ADMIN_ALLOWED_ORIGINS`; local HTTP uses the existing
+explicit development cookie configuration. Use `localhost`, consistently, for the browser.
+No wildcard credentialed CORS is needed. Existing generated environments already include
+this origin; preserve other origins when updating an older deployment.
+
+Optional public configuration is documented in `apps/dashboard/.env.example`.
+`VITE_API_BASE_URL` defaults to `/api/admin`; `SENTINEL_API_PROXY_TARGET` is server-only.
+Never put credentials or signing keys in a `VITE_*` variable. Production requires HTTPS,
+Secure cookies, an exact trusted frontend Origin and a same-site administrative API.
+Serve `dist` with SPA fallback and reverse proxy `/api/admin` to FastAPI. Vite preview is
+for local build verification, not the production server.
+
+From `apps/dashboard`:
+
+```powershell
+npm.cmd run api:check
+npm.cmd run format:check
+npm.cmd run lint
+npm.cmd run typecheck
+npm.cmd run test:coverage
+npm.cmd run build
+npm.cmd run preview
+```
+
+Run browser integration after the backend suite completes and the stack is healthy:
+
+```powershell
+npx.cmd playwright install chromium
+npm.cmd run test:integration
+```
+
+The integration fixture provisions random temporary ADMIN/ANALYST accounts, drives the
+actual built UI against FastAPI, emits owned demo traffic, and cleans up its accounts and
+sessions. Policy settings are restored, including after ordinary test failures; audit
+history and monitored traffic are retained. Do not run policy-changing verification
+scripts or manual policy edits concurrently. No permanent demonstration password,
+credential storage file, browser trace, or authentication secret is created in reports.
+Current browsers with Web Locks and BroadcastChannel are required for cross-tab session
+coordination. Automatic polling is limited to the Overview (60 seconds, paused while hidden).
+Manual visual acceptance remains for the dedicated local testing session.

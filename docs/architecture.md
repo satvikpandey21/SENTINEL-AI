@@ -21,8 +21,8 @@ Alembic owns schema history. The initial revision deliberately has no speculativ
 | Administrative API | JWT authorization, policy management, audit queries | Demo business behavior |
 | Event publisher (Day 2) | Bounded publication, explicit retry/delivery semantics | Synchronous allow/deny decisions |
 | Asynchronous worker (Day 2) | Event consumption, durable event writes, and asynchronous threat analysis | Request-path rate-limit decisions |
-| React dashboard | Authenticated operational view and real-time notifications | Access tokens in logs or security decisions |
-| Monitoring | Prometheus service metrics and Grafana dashboards | Sensitive request payload collection |
+| React dashboard (Phase 6) | Authenticated operational views and bounded polling | Access tokens in logs or security decisions |
+| Future monitoring | Prometheus service metrics and Grafana dashboards | Sensitive request payload collection |
 
 A RabbitMQ outage must not automatically bypass Redis rate limiting. Publication failure and enforcement failure need independent configuration, metrics, and tests. Redis failure policy must be explicit per protected route or deployment rather than silently allowing everything. Readiness may report degraded dependencies while the request path still enforces available controls; a future deployment should decide whether a degraded broker removes an instance from routing.
 
@@ -107,3 +107,44 @@ The data APIs use explicit output schemas and bounded SQL queries, never ORM ser
 Migration `0005_administration` adds private control-plane tables and query indexes without rewriting security events or assessments. Downgrade refuses to discard existing administrative history. Audit actors have stable UUIDs without cascading deletion, preserving history after account retirement. Audits are append-only through this HTTP API, but a PostgreSQL owner can still change rows; external tamper-evident archival is a later operational enhancement.
 
 No services or heavyweight runtime ML dependencies were added. Existing pools remain bounded, Argon2 work is limited to two concurrent hashes per administrative process (64 MiB each), pages cap at 100, time windows at 31 days, analytics alert/client lists at 20, and client detail lists at 50. Tests continue to use the existing Linux image and real PostgreSQL, Redis, RabbitMQ, worker, and protected demo service.
+
+
+## Phase 6: browser administration
+
+`apps/dashboard` is an independent React/TypeScript/Vite application. Route modules load
+lazily; `AppLayout` owns sidebar, topbar, role-aware navigation and mobile navigation.
+Reusable tables, native modal dialogs, query filters, pagination, notices and chart/data
+views live in `src/components`. CSS is separated into tokens, layout, components, pages
+and responsive rules. Reduced-motion preferences and keyboard focus are respected.
+
+`src/api/generated.ts` is generated from the existing `docs/admin-openapi.json`; CI checks
+both backend OpenAPI drift and generated frontend type drift. `DashboardApi` exposes only
+existing backend operations. Every paginated request is bounded; list views anchor their
+UTC investigation window. `useResource` cancels obsolete requests, rejects late responses,
+provides loading/error/empty/retry states, and can poll with visibility pause. Only Overview
+polls (once per 60 seconds). No WebSocket transport is implemented or claimed.
+
+`Session` privately holds access tokens. Login, CSRF preparation, refresh and logout use
+cookie credentials and the required intent/nonce headers. Ordinary resource requests
+omit cookies and supply the in-memory bearer token. Renewal is deduplicated in a tab;
+Web Locks serialize cookie mutations across tabs. BroadcastChannel carries sign-in/out
+notices, never tokens. Reload obtains a fresh nonce and rotates the cookie while holding
+the same lock. Requests retry a 401 once; revocation clears state. A session-generation
+check prevents an old request from retrying or publishing data after an account switch.
+Server authorization and account/session revocation remain authoritative.
+
+Policy edits retain protected scope and rule structure, validate actual schema bounds,
+require review, include `expected_version`, and distinguish confirmed Redis activation
+from saved/pending revisions. A 409 or ambiguous 503 requires reload before resubmission.
+ANALYST policy views are read-only; ADMIN-only audit/account APIs remain server protected.
+Settings expose only actual profile, account and session capabilities.
+
+The frontend adds no containers or backend services. Vite's development and preview proxy
+preserves Origin and uses the existing loopback administrative API. Production deployment
+must provide HTTPS, exact allowed origins, Secure cookies, SPA fallback and an API reverse
+proxy. Cross-site refresh-cookie deployments are outside the SameSite=Strict contract.
+
+Vitest/Testing Library cover session, API and page behavior; Playwright exercises the
+production build against real local services with ephemeral accounts. Axe and viewport
+assertions automate accessibility and page-overflow checks. Manual visual acceptance is
+reserved for the dedicated session. [Executed evidence and limitations](day-6-verification.md).

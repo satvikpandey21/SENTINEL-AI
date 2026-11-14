@@ -1,6 +1,6 @@
 ﻿# Administrative API contract (Phase 5)
 
-The versioned backend contract is [admin-openapi.json](admin-openapi.json). Generate TypeScript types from that file; the development service also serves `/openapi.json` and `/docs`. Production disables these public documentation routes. The base path is `/api/admin`. No React components, WebSockets, or Grafana are included.
+The versioned backend contract is [admin-openapi.json](admin-openapi.json). Generate TypeScript types from that file; the development service also serves `/openapi.json` and `/docs`. Production disables these public documentation routes. The base path is `/api/admin`. The Phase 6 React dashboard consumes this contract; WebSockets and Grafana remain outside its scope.
 
 ## Provisioning and deployment
 

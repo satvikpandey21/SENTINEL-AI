@@ -113,10 +113,20 @@ def train_and_evaluate():
     from sentinel_security.anomaly_model import Artifact
 
     validated = Artifact.model_validate(artifact)
-    runner = AnomalyModel(AnalysisPolicy())
+    # Offline parity evaluation is not subject to the worker's 10 ms latency target.
+    # Allow scheduler noise while retaining the production inference timeout unchanged.
+    runner = AnomalyModel(AnalysisPolicy(inference_budget_ms=100))
     runner.artifact = validated
     runner.status = "ready"
-    outputs = [runner.infer(row, complete_window=True) for row in normal + abnormal + shifted]
+    outputs = []
+    for row in normal + abnormal + shifted:
+        for _ in range(3):
+            output = runner.infer(row, complete_window=True)
+            if output["status"] != "timeout":
+                break
+        if output["status"] != "ready":
+            raise RuntimeError(f"offline model evaluation unavailable: {output['status']}")
+        outputs.append(output)
     reference = -model.score_samples(matrix(normal + abnormal + shifted))
     parity = max(
         abs(output["anomaly_score"] - float(expected))

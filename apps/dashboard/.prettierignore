@@ -1,0 +1,5 @@
+src/api/generated.ts
+dist/
+coverage/
+playwright-report/
+test-results/
