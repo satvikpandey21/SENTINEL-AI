@@ -84,7 +84,13 @@ test('server restart restores streaming and preserves the event investigation', 
   credentials,
 }) => {
   await signIn(page, credentials);
-  await page.goto('/events');
+  await expect(page.getByRole('status', { name: 'Security stream: Connected' })).toBeVisible();
+  // Preserve the authenticated stream; full reload restoration has separate coverage.
+  await page
+    .getByRole('navigation', { name: 'Main navigation' })
+    .getByRole('link', { name: 'Security Events', exact: true })
+    .click();
+  await expect(page.getByRole('heading', { name: 'Security events', exact: true })).toBeVisible();
   await expect(page.getByRole('status', { name: 'Security stream: Connected' })).toBeVisible();
   await page.getByLabel('Service', { exact: true }).fill('sentinel-demo-api');
   await page.getByRole('button', { name: 'Apply filters' }).click();

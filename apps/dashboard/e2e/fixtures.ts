@@ -30,7 +30,8 @@ const script = readFileSync(
   new URL('../../../scripts/dashboard_test_accounts.py', import.meta.url),
   'utf8',
 );
-export const test = base.extend<object, { credentials: Credentials }>({
+export const test = base.extend<{ credentials: Credentials }>({
+  // Account-scoped streaming limits must not accumulate across unrelated tests.
   // Playwright requires a destructured first fixture argument.
   credentials: [
     // eslint-disable-next-line no-empty-pattern
@@ -77,7 +78,7 @@ export const test = base.extend<object, { credentials: Credentials }>({
         );
       }
     },
-    { scope: 'worker' },
+    { scope: 'test' },
   ],
 });
 export { expect };

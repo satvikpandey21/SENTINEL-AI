@@ -66,6 +66,20 @@ async def test_atomic_redemption_expiration_and_issuance_limit(admin_env, socket
     assert (await client.post("/api/admin/ws/v1/ticket", headers=auth)).status_code == 429
 
 
+async def test_account_ticket_limit_is_shared_across_login_sessions(admin_env):
+    _, client, _, _, config = admin_env
+    # Each session stays within its own budget while exhausting the account budget.
+    for _ in range(2):
+        _, auth = await login(admin_env)
+        for _ in range(config.ws_ticket_limit):
+            await ticket(admin_env, auth)
+    _, auth = await login(admin_env)
+    assert (await client.get("/api/admin/auth/me", headers=auth)).status_code == 200
+    response = await client.post("/api/admin/ws/v1/ticket", headers=auth)
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "60"
+
+
 @pytest.mark.parametrize("change", ["disabled", "role", "revoked", "expired", "logout"])
 async def test_live_authorization_and_handshake_follow_database(admin_env, socket_factory, change):
     resources, client, _, _, config = admin_env
