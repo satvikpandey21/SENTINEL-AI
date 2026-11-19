@@ -23,7 +23,7 @@ COPY alembic.ini ./
 COPY migrations ./migrations
 USER 10001:10001
 EXPOSE 8000
-CMD ["uvicorn", "sentinel_api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers", "--no-access-log", "--log-config", "/app/uvicorn-log.json"]
+CMD ["uvicorn", "sentinel_api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers", "--ws", "websockets-sansio", "--ws-max-size", "512", "--ws-per-message-deflate", "false", "--no-access-log", "--log-config", "/app/uvicorn-log.json"]
 COPY uvicorn-log.json ./
 
 FROM runtime AS test

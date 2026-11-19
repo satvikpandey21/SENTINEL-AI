@@ -1,0 +1,9 @@
+﻿# Temporary HTTPS tunnel origin only; publicly exposed TLS is provided by cloudflared.
+# The backend still requires production Secure cookies and the exact public HTTPS Origin.
+services:
+  ingress:
+    ports: !override ['127.0.0.1:8080:8080']
+    volumes:
+      - ./infra/deploy/Caddyfile.tunnel:/etc/caddy/Caddyfile:ro
+  grafana:
+    ports: !reset []

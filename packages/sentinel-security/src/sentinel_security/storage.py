@@ -1,6 +1,7 @@
 """Allowlisted audit schema and idempotent PostgreSQL persistence."""
 
 from datetime import datetime
+from time import monotonic
 from uuid import UUID
 
 from sqlalchemy import (
@@ -21,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from sentinel_security.database import Base
 from sentinel_security.events import MonitoringEvent
+from sentinel_security.realtime import notification_for
 
 
 class SecurityEventRecord(Base):
@@ -90,21 +92,54 @@ class SecurityEventRecord(Base):
 
 
 class EventStore:
-    def __init__(self, sessions: async_sessionmaker[AsyncSession], analysis=None) -> None:
+    def __init__(
+        self, sessions: async_sessionmaker[AsyncSession], analysis=None, notifier=None, metrics=None
+    ):
         self.sessions = sessions
         self.analysis = analysis
+        self.notifier = notifier
+        self.metrics = metrics
 
     async def persist(self, event: MonitoringEvent) -> bool:
+        started = monotonic()
+        try:
+            inserted = await self._persist(event)
+        except Exception:
+            if self.metrics is not None:
+                self.metrics.inc("persistence_errors")
+            raise
+        else:
+            if self.metrics is not None:
+                self.metrics.inc(
+                    "persistence_events", outcome="persisted" if inserted else "duplicate"
+                )
+            return inserted
+        finally:
+            if self.metrics is not None:
+                self.metrics.observe("persistence_duration_seconds", monotonic() - started)
+
+    async def _persist(self, event: MonitoringEvent) -> bool:
         statement = (
             insert(SecurityEventRecord)
             .values(**event.model_dump())
             .on_conflict_do_nothing(index_elements=[SecurityEventRecord.event_id])
             .returning(SecurityEventRecord.event_id)
         )
+        assessment = None
         async with self.sessions() as session, session.begin():
             result = await session.execute(statement)
             inserted = result.scalar_one_or_none() is not None
             if inserted and self.analysis is not None and self.analysis.policy.enabled:
-                await self.analysis.analyze(session, event)
+                assessment = await self.analysis.analyze(session, event)
         # The transaction has committed before the caller can acknowledge the broker message.
+        if inserted and assessment is not None and self.metrics is not None:
+            self.metrics.inc("assessments_committed", severity=assessment.severity)
+        if inserted and self.notifier is not None:
+            try:
+                self.notifier.offer(notification_for(event, assessment))
+            except Exception:
+                # Even a schema/serialization fault must not turn a committed event into a DLQ.
+                import structlog
+
+                structlog.get_logger().warning("notification_offer_failed")
         return inserted

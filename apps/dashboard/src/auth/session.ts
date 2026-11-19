@@ -7,6 +7,7 @@ export type AuthState = {
   expiresAt: number | null;
   message?: string;
   logoutUnconfirmed?: boolean;
+  signingOut?: boolean;
 };
 type Notice = { type: 'signed-in' | 'signed-out' | 'renewed' };
 type Channel = Pick<BroadcastChannel, 'postMessage' | 'close' | 'onmessage'>;
@@ -84,6 +85,7 @@ export class Session {
     };
   };
   getSnapshot = () => this.state;
+  getEpoch = () => this.generation;
   private update(state: AuthState) {
     this.state = state;
     this.listeners.forEach((listener) => listener());
@@ -197,6 +199,9 @@ export class Session {
     return this.renewal;
   }
   async logout(): Promise<boolean> {
+    this.clearCredentials();
+    this.update({ ...this.state, signingOut: true });
+    this.notice('signed-out');
     let confirmed = false;
     try {
       await this.environment.lock(async () => {
@@ -276,6 +281,7 @@ export class Session {
     return () => document.removeEventListener('visibilitychange', listener);
   }
   destroy() {
+    this.invalidate(undefined, false);
     clearTimeout(this.timer);
     this.environment.channel?.close();
     this.listeners.clear();

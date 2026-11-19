@@ -1,0 +1,28 @@
+{
+    admin off
+    log default {
+        format filter {
+            wrap json
+            fields {
+                request delete
+                headers delete
+            }
+        }
+    }
+    servers {
+        max_header_size 16KB
+        timeouts {
+            read_header 10s
+            read_body 15s
+            idle 2m
+        }
+    }
+    auto_https off
+}
+import /etc/caddy/common.caddy
+http://{$SENTINEL_HOST}:8080 {
+    import sentinel
+}
+http://:8081 {
+    respond /health/ingress "ready" 200
+}

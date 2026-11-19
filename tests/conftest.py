@@ -10,6 +10,7 @@ from sentinel_security.events import SecurityEvent
 @pytest.fixture
 def settings(monkeypatch):
     for key in (
+        "METRICS_ENABLED",
         "DATABASE_URL",
         "REDIS_URL",
         "RABBITMQ_URL",
@@ -53,3 +54,77 @@ def security_event():
         authentication_outcome="not_provided",
         response_completed=True,
     )
+
+
+class ASGISocket:
+    """Real ASGI upgrade on the test's event loop, without a thread-bound DB pool."""
+
+    def __init__(
+        self, app, ticket=None, origin="https://dashboard.test", protocols=None, query=b""
+    ):
+        import asyncio
+
+        self.incoming, self.outgoing = asyncio.Queue(), asyncio.Queue()
+        self.app = app
+        self.scope = {
+            "type": "websocket",
+            "asgi": {"version": "3.0", "spec_version": "2.4"},
+            "path": "/api/admin/ws/v1/security",
+            "raw_path": b"/api/admin/ws/v1/security",
+            "query_string": query,
+            "scheme": "wss",
+            "root_path": "",
+            "server": ("admin.test", 443),
+            "client": ("127.0.0.1", 1234),
+            "subprotocols": protocols
+            if protocols is not None
+            else (["sentinel.security.v1", "sentinel.ticket." + ticket] if ticket else []),
+            "headers": [
+                (b"origin", origin.encode()),
+                (
+                    b"sec-websocket-protocol",
+                    ", ".join(
+                        protocols
+                        if protocols is not None
+                        else (
+                            ["sentinel.security.v1", "sentinel.ticket." + ticket] if ticket else []
+                        )
+                    ).encode(),
+                ),
+            ],
+        }
+
+    async def __aenter__(self):
+        import asyncio
+
+        await self.incoming.put({"type": "websocket.connect"})
+        self.task = asyncio.create_task(self.app(self.scope, self.incoming.get, self.outgoing.put))
+        self.handshake = await self.receive()
+        return self
+
+    async def receive(self):
+        import asyncio
+
+        return await asyncio.wait_for(self.outgoing.get(), 5)
+
+    async def json(self):
+        import json
+
+        frame = await self.receive()
+        assert frame["type"] == "websocket.send", frame
+        return json.loads(frame["text"])
+
+    async def __aexit__(self, *exc):
+        import asyncio
+
+        await self.incoming.put({"type": "websocket.disconnect", "code": 1000})
+        try:
+            await asyncio.wait_for(self.task, 2)
+        except TimeoutError:
+            self.task.cancel()
+            await asyncio.gather(self.task, return_exceptions=True)
+
+
+@pytest.fixture
+def socket_factory():
+    return ASGISocket

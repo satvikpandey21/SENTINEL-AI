@@ -1,3 +1,4 @@
+import { NewActivity, useLiveRefresh } from '../realtime/LiveActivity';
 import { useState } from 'react';
 import { useLocation } from 'react-router';
 import type { AssessmentQuery } from '../api/types';
@@ -28,6 +29,7 @@ function ThreatExplorer({ search }: { search: string }) {
   const [draft, setDraft] = useState<AssessmentQuery>(initial);
   const scope = useWindow();
   const [applied, setApplied] = useState<AssessmentQuery>({ ...initial, ...scope.window });
+  const [appliedRange, setAppliedRange] = useState<import('../utils/format').Range | null>('24h');
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<string | null>(params.get('assessment'));
   const [invalid, setInvalid] = useState('');
@@ -35,6 +37,15 @@ function ThreatExplorer({ search }: { search: string }) {
   const result = useResource('threats:' + JSON.stringify(query), (signal) =>
     api.assessments(query, signal),
   );
+  const liveRefresh = () => {
+    if (appliedRange) setApplied((old) => ({ ...old, ...windowFor(appliedRange) }));
+    else result.refresh();
+  };
+  const live = useLiveRefresh(liveRefresh, false, true);
+  const refreshLive = () => {
+    live.acknowledge();
+    liveRefresh();
+  };
   const field = <K extends keyof AssessmentQuery>(key: K, value: AssessmentQuery[K]) =>
     setDraft((old) => ({ ...old, [key]: value === '' ? undefined : value }));
   return (
@@ -47,7 +58,7 @@ function ThreatExplorer({ search }: { search: string }) {
         <RefreshControl
           loading={result.loading}
           updatedAt={result.updatedAt}
-          onRefresh={result.refresh}
+          onRefresh={refreshLive}
         />
       </PageHeading>
       <div className="method-strip">
@@ -65,6 +76,7 @@ function ThreatExplorer({ search }: { search: string }) {
         </span>
         <small>Risk is an assessment score, not an attack probability.</small>
       </div>
+      <NewActivity pending={live.pending} refresh={refreshLive} assessments={true} />
       <FilterBar
         onSubmit={(event) => {
           event.preventDefault();
@@ -73,10 +85,14 @@ function ThreatExplorer({ search }: { search: string }) {
             return;
           }
           setInvalid('');
+          setAppliedRange(scope.custom ? null : scope.range);
+          live.acknowledge();
           setApplied({ ...draft, ...scope.window });
           setOffset(0);
         }}
         onReset={() => {
+          setAppliedRange('24h');
+          live.acknowledge();
           setDraft({});
           scope.changeRange('24h');
           setApplied(windowFor('24h'));

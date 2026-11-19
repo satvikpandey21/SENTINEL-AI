@@ -10,6 +10,21 @@ type Credentials = {
   prefix: string;
   policies: unknown[];
 };
+export const deploymentArgs =
+  process.env.SENTINEL_E2E_PRODUCTION === '1'
+    ? [
+        '--env-file',
+        '.env.production-test',
+        '-p',
+        'sentinel-production-test',
+        '-f',
+        'compose.yaml',
+        '-f',
+        'compose.production.yaml',
+        '-f',
+        'compose.production-test.yaml',
+      ]
+    : [];
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const script = readFileSync(
   new URL('../../../scripts/dashboard_test_accounts.py', import.meta.url),
@@ -21,19 +36,33 @@ export const test = base.extend<object, { credentials: Credentials }>({
     // eslint-disable-next-line no-empty-pattern
     async ({}, use) => {
       const run = (args: string[] = []) =>
-        execFileSync('docker', ['compose', 'exec', '-T', 'admin-api', 'python', '-', ...args], {
-          cwd: root,
-          input: script,
-          encoding: 'utf8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
+        execFileSync(
+          'docker',
+          ['compose', ...deploymentArgs, 'exec', '-T', 'admin-api', 'python', '-', ...args],
+          {
+            cwd: root,
+            input: script,
+            encoding: 'utf8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+          },
+        );
       const credentials = JSON.parse(run()) as Credentials;
       try {
         await use(credentials);
       } finally {
         execFileSync(
           'docker',
-          ['compose', 'exec', '-T', 'admin-api', 'python', '-', '--cleanup', credentials.prefix],
+          [
+            'compose',
+            ...deploymentArgs,
+            'exec',
+            '-T',
+            'admin-api',
+            'python',
+            '-',
+            '--cleanup',
+            credentials.prefix,
+          ],
           {
             cwd: root,
             input: script.replace(

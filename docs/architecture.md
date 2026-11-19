@@ -148,3 +148,169 @@ Vitest/Testing Library cover session, API and page behavior; Playwright exercise
 production build against real local services with ephemeral accounts. Axe and viewport
 assertions automate accessibility and page-overflow checks. Manual visual acceptance is
 reserved for the dedicated session. [Executed evidence and limitations](day-6-verification.md).
+
+## Phase 7: committed security activity streaming
+
+The worker offers one version 1 notification after the PostgreSQL event/profile/assessment
+transaction commits. Only newly inserted event UUIDs are offered. The offer serializes an
+allowlist and uses a bounded 256-entry queue without awaiting network I/O. A separate task
+publishes to the single Redis channel `sentinel:security:notifications:v1` with a 200 ms
+operation deadline. RabbitMQ consumption, commit-before-ack, retry, quarantine and deduplication
+are unchanged. No WebSocket consumer subscribes to the durable RabbitMQ queue. Notifications
+do not traverse the monitoring middleware or generate new monitoring events.
+
+Each admin API process owns one Redis subscription and fans validated frames to at most
+128 local clients, with 32 queued frames per client and a 4096-byte notification limit.
+A slow client closes with 1013 and reconciles on reconnect. Worker queue saturation and
+Redis publication failure drop hints, never roll back commits or affect RabbitMQ ack.
+Redis subscription failure closes connected clients and the subscriber retries independently.
+Pub/Sub is an **at-most-once, best-effort hint transport**, not a durable notification log.
+Loss windows include process failure between commit/offer/publication, buffer overflow,
+publish timeout, absent subscribers, socket interruption and shutdown. There is no outbox,
+replay cursor, exactly-once delivery promise, or persistent notification acknowledgement.
+PostgreSQL and the authenticated REST APIs remain authoritative. See the Redis
+[delivery semantics](https://redis.io/docs/latest/develop/pubsub/).
+
+The authenticated `POST /api/admin/ws/v1/ticket` requires the existing access JWT, a live
+PostgreSQL session, an allowed Origin and the CSRF intent header. It returns a 256-bit random
+ticket valid for 20 seconds. Redis retains only its SHA-256 key plus account/session/role/Origin
+binding. The handshake sends `sentinel.security.v1` and `sentinel.ticket.<ticket>` subprotocols;
+only the fixed first protocol is selected. Redis GETDEL atomically consumes the ticket.
+Query strings, missing/ambiguous/unapproved Origins, invalid/reused/expired tickets and invalid
+accounts/sessions are rejected before upgrade. Credentials never appear in URLs or application
+logs. The reverse proxy must also redact protocol/Authorization headers and avoid access-log
+query recording. Production uses same-site HTTPS/WSS, exact HTTPS origins and Secure cookies.
+
+Tickets are limited to 12/minute/session and 24/minute/account. Handshake attempts are limited
+to 120/minute per signing-key-HMAC peer identity; untrusted forwarded addresses are ignored.
+Redis server-time leases limit active connections across replicas to 4/session and 8/account.
+Leases renew during authorization checks, expire after 60 seconds following crashes and
+fail closed when Redis is unavailable. Deployment replicas must share Redis and signing keys.
+The process cap is separate from these distributed caps. The pinned Uvicorn SansIO WebSocket
+implementation limits inbound messages to 512 bytes, disables compression, and pauses socket
+reads while the application is processing messages. The only permitted application message is
+the fixed heartbeat pong; processing is limited to ten such messages/second/client.
+
+Open connections are authorized by the PostgreSQL session rather than the lifetime of the
+access JWT used to mint a ticket. Access-token expiry therefore does not extend a session
+or force periodic reconnects; each fresh ticket requires fresh bearer authorization. Every
+15 seconds, with a 3-second DB deadline, the server rechecks session expiry/revocation,
+account activation and the original role. ADMIN and ANALYST may read; role changes close
+the connection, including ADMIN-to-ANALYST. Existing account-management writes also revoke
+sessions. Invalid authorization closes with 4401; dependency failures close with 1013.
+The bound is the check interval plus query deadline and bounded socket send/close scheduling,
+not instantaneous cross-process revocation. Client logout and cross-tab sign-out close local
+sockets immediately; the initiating tab finishes server logout before navigating away.
+
+Server application heartbeats arrive every 20 seconds, including during bursts. The browser
+replies with `connection.pong`; the server closes idle clients after 60 seconds, checked during
+revalidation. Shutdown signals all clients, cancels subscription/sender/receiver/watchdog tasks,
+releases leases where possible and otherwise relies on TTL. Browser silence triggers recovery
+after 50 seconds. Ticket acquisition and callbacks use generation checks to isolate accounts.
+
+React owns one bounded stream per authenticated online tab, including background tabs after
+the Phase 9 correction. Offline tabs release their socket; return to the page reconciles
+REST and reconnects with a fresh ticket if necessary. Retries use jittered exponential delays
+from 0.5–1 seconds to 15–30 seconds, capped at eight failures, then expose a manual retry.
+Confirmed 401/403 or accepted-socket 4401/4403 ends authentication and stops retries. Browsers
+cannot inspect HTTP denial status during a failed upgrade, so ambiguous handshake failures
+use the bounded temporary-unavailability path. A successful `connection.ready`, including the
+first connection, reconciles mounted REST resources to close subscribe/fetch races. Overview
+invalidations batch at 1.5 seconds; the existing 60-second polling and manual refresh remain.
+Events and Threat Intelligence show new-activity indicators and refetch on demand. Reconnect
+refetches automatically without changing filters, offsets or selected detail IDs. Relative
+windows advance when explicitly refreshed/reconciled; custom absolute windows remain fixed.
+
+The bell keeps at most 50 local notices, stable event UUID deduplication retains 2048 IDs,
+and identical service/endpoint/action/severity/classification groups have a 30-second cooldown
+(with a 256-group bound). Default alerts include real restrictions, authentication-failure
+classifications, and High/Critical risk. Degraded infrastructure decisions are informational.
+Ordinary HTTP failures do not become attack alerts. Informational activity is opt-in in the
+center; there are no routine toasts. `alertPolicy` in `stream.ts` configures cooldown, history,
+batching and retries. ML remains supporting experimental evidence, never an attack probability
+or an enforcement cause. All read/clear state is tab-local memory and disappears on sign-out.
+
+## Phase 8 private operational observability
+
+```mermaid
+flowchart LR
+    API[Admin and demo API registries] -->|private bearer-authenticated 9100| Prom[Prometheus]
+    Worker[Worker registry] -->|private bearer-authenticated 9100| Prom
+    Broker[RabbitMQ native aggregate and allowlisted queue metrics] -->|private monitoring identity 15692| Prom
+    Probe[Bounded background dependency probes] --> API
+    Probe --> Worker
+    Prom --> TSDB[(7 day / 1 GiB metric blocks)]
+    Prom --> Rules[9 operational alert rules]
+    Grafana[Grafana: localhost 3000] -->|internal data source| Prom
+    JSON[5 provisioned JSON dashboards] --> Grafana
+```
+
+Each process owns its registry; initialization never registers application metrics in the
+Prometheus Python client's default registry. The HTTP middleware observes complete-response
+time using the same elapsed-time sample as event metadata. Registered route templates and
+fixed enum labels bound cardinality. Health and scrape traffic are excluded. Security,
+publication, commit, analysis and WebSocket stages expose their own observations without
+introducing DB/broker waits in request middleware or unbounded instrumentation buffers.
+Per-process metrics reset on restart. Multiple independent Uvicorn workers in one container
+are not supported by this private-listener design.
+
+The optional private listener serializes metrics already held in memory. Separate probes
+use existing resource clients and operation deadlines. They do not run expensive queries on
+scrape. `telemetry` and `observability` are internal Docker networks; only Grafana publishes
+127.0.0.1:3000, and Prometheus has no host port. Metrics bearer authentication does not grant
+Sentinel API authorization. RabbitMQ monitoring credentials have no AMQP vhost permissions.
+No IP/client HMAC, account/session/event/request ID, sensitive feature or exception-text
+labels enter application metrics. Native broker scrapes aggregate or allowlist queue labels.
+
+The independent Grafana credential lives outside Git in a Compose secret. Generated files
+use LF on Windows to avoid entrypoint password mismatches. Existing credentials and data
+volumes remain intact. Provisioning fixes the Prometheus data-source UID and dashboard UIDs;
+no secret or fictional data is embedded in exports. Missing samples are explicitly distinct
+from zero. Experimental ML status and processing duration are operational evidence, not
+validated detection accuracy or permission to block.
+
+Prometheus/Grafana have hard 512 MiB / 1 CPU limits, bounded scrape/query settings and health
+checks. No Alertmanager, heavyweight database exporter, cloud service or paid dependency is
+added. Operational rules are queryable in Prometheus and never sent into the Phase 7 stream.
+Applications continue handling requests, enforcing restrictions, persisting events and
+serving authenticated sockets when both observability services are stopped.
+
+See [observability.md](observability.md) for the complete metric contract, exact configuration,
+security boundaries, thresholds, startup and recovery commands; [day-8-verification.md](day-8-verification.md)
+records executed acceptance evidence and local measurement limits.
+
+
+## Phase 9: final integration and production ingress
+
+Two reproduced frontend defects were corrected without changing detection algorithms or
+backend durability. Mobile rules that selected every account-header `div`, button or badge
+also affected the nested notification center; explicit account-details and direct-child
+selectors now isolate those rules. A hidden-tab disconnect created a live-hint gap while an
+operator generated traffic in a terminal. Online background tabs now keep their authenticated
+bounded socket; visibility return increments REST reconciliation without reconnect churn.
+Offline behavior, retry limits, session generations, revocation and connection caps remain.
+Bell history stays bounded/tab-local; enabling information never backfills older events.
+
+Production adds one Caddy process serving the built SPA and `/api/admin` on the same HTTPS
+origin, with automatic public certificates when a real DNS host is available. WebSocket
+upgrades use WSS through that ingress. Only its fixed 172.30.90.2 address is trusted for
+forwarded peer identity. Caller-supplied chains are overwritten, request/header log objects
+are removed, CSP/security headers are set, and header/body/time limits are bounded.
+Non-root/read-only execution, dropped capabilities, private networks and resource caps
+limit the ingress. Production removes the admin host binding, disables development login,
+and does not publicly route demo, database, broker or metrics interfaces.
+
+`compose.production.yaml` layers these settings over the existing standard services and
+volumes. Dedicated generated production credentials and an explicit project name isolate
+new deployments. `compose.production-test.yaml` restricts ingress to loopback 8080/8443 and
+uses a private local CA; it is acceptance evidence, not a public deployment. A separate
+`compose.tunnel.yaml` supports only a manually authorized temporary tunnel to a loopback
+production ingress. Neither creates a cloud account or an always-on hosting guarantee.
+
+The deployed worker remains sequential per replica with bounded queues, commit-before-ack,
+finite retries/quarantine, idempotent persistence, explainable risk and optional trusted
+experimental ML. No Phase 9 schema migration or replacement of the seven-page UI was needed.
+[Deployment procedures](deployment-guide.md) describe source releases containing uncommitted
+files, private configuration, backup/restore, migrations, rollback and external acceptance.
+[Final verification](day-9-verification.md) separates local proof from unverified public/ARM
+execution. Existing Phase 7/8 reports retain their historical observations.

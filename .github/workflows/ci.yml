@@ -5,6 +5,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,25 +25,39 @@ jobs:
       - run: python scripts/init_env.py
       - run: python scripts/configure_demo_auth.py --initialize
       - run: python scripts/init_env.py --add-admin-key
+      - run: python scripts/init_observability.py
       - run: docker compose config --quiet
       - run: docker compose --profile test build
       - run: docker run --rm -v "$PWD:/workspace:ro" -w /workspace sentinel-ai-tests python -m ruff check --no-cache .
       - run: docker run --rm -v "$PWD:/workspace:ro" -w /workspace sentinel-ai-tests python -m ruff format --no-cache --check .
       - run: docker run --rm -v "$PWD:/workspace:ro" -w /workspace sentinel-ai-tests python scripts/export_admin_openapi.py --check
       - run: docker compose up --wait --wait-timeout 180
+      - run: docker compose exec -T prometheus promtool check config /etc/prometheus/prometheus.yml
+      - run: docker compose exec -T -w /etc/prometheus prometheus promtool test rules alerts.test.yml
       - run: docker compose exec -T admin-api alembic check
       - run: docker compose --profile test run --rm tests
       - run: docker compose --profile test run --rm tests python scripts/verify_admin.py
+      - run: docker compose --profile test run --rm tests python scripts/verify_realtime.py
+      - run: docker compose --profile test run --rm tests python scripts/verify_observability.py
       - run: npx playwright install --with-deps chromium
         working-directory: apps/dashboard
       - run: npm run test:integration
         working-directory: apps/dashboard
+      - run: python scripts/init_production.py --origin https://localhost:8443 --local-test
+      - run: python scripts/deploy.py up --env-file .env.production-test --project sentinel-production-test --mode local-test
+      - run: python scripts/verify_deployment.py --fault-check
+      - run: npm run test:integration
+        working-directory: apps/dashboard
+        env:
+          SENTINEL_E2E_PRODUCTION: '1'
       - uses: actions/upload-artifact@v4
         with:
           name: dashboard-coverage-and-build
           path: |
             apps/dashboard/coverage
             apps/dashboard/dist
+            .artifacts/day8-grafana-system.png
+            .artifacts/day9-mobile400.png
       - run: mkdir -p .artifacts && docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/.artifacts:/output" sentinel-ai-tests python -m sentinel_security.model_training --output /output
       - uses: actions/upload-artifact@v4
         with:
@@ -51,4 +66,8 @@ jobs:
       - if: failure()
         run: docker compose logs --tail=100
       - if: always()
-        run: docker compose down
+        run: |
+          docker compose down
+          if [ -f .env.production-test ]; then
+            docker compose --env-file .env.production-test -p sentinel-production-test -f compose.yaml -f compose.production.yaml -f compose.production-test.yaml down
+          fi

@@ -1,0 +1,8 @@
+﻿# Isolated local TLS acceptance only; never use this override for public deployment.
+services:
+  ingress:
+    ports: !override ['127.0.0.1:8080:80', '127.0.0.1:8443:443']
+    volumes:
+      - ./infra/deploy/Caddyfile.local-test:/etc/caddy/Caddyfile:ro
+  grafana:
+    ports: !reset []

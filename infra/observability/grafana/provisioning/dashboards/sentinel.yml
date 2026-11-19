@@ -1,0 +1,16 @@
+{
+  "apiVersion": 1,
+  "providers": [
+    {
+      "name": "Sentinel Operations",
+      "folder": "Sentinel AI Operations",
+      "type": "file",
+      "disableDeletion": true,
+      "updateIntervalSeconds": 30,
+      "allowUiUpdates": false,
+      "options": {
+        "path": "/var/lib/grafana/dashboards"
+      }
+    }
+  ]
+}

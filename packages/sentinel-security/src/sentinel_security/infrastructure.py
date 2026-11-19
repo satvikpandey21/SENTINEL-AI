@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import AsyncExitStack
+from time import monotonic
 
 import aio_pika
 import structlog
@@ -65,9 +66,12 @@ class Resources:
 
     async def health(self) -> dict[str, str]:
         async def probe(name, check):
+            started = monotonic()
+            up = False
             try:
                 async with asyncio.timeout(self.settings.dependency_timeout_seconds):
                     await check()
+                up = True
                 return name, "up"
             except Exception as error:
                 # Dependency library errors can contain connection URLs. Never log str(error).
@@ -75,6 +79,10 @@ class Resources:
                     "dependency_unavailable", dependency=name, error_type=type(error).__name__
                 )
                 return name, "down"
+            finally:
+                metrics = getattr(self, "metrics", None)
+                if metrics is not None:
+                    metrics.dependency(name, up, monotonic() - started)
 
         return dict(
             await asyncio.gather(

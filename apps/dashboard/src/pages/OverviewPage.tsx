@@ -1,3 +1,4 @@
+import { useLiveRefresh } from '../realtime/LiveActivity';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { Activity, ArrowUpRight, Fingerprint, Gauge, ShieldAlert, ShieldBan } from 'lucide-react';
@@ -36,6 +37,7 @@ export default function OverviewPage() {
       ),
     { pollMs: 60000 },
   );
+  useLiveRefresh(result.refresh, true);
   const data = result.data;
   const metrics = data
     ? [

@@ -203,7 +203,7 @@ nav[aria-label='Main navigation'] a svg {
   align-items: center;
   gap: 11px;
 }
-.topbar-account strong {
+.topbar-account > .account-details strong {
   font-size: 0.78rem;
   font-weight: 550;
   display: block;
@@ -211,7 +211,7 @@ nav[aria-label='Main navigation'] a svg {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.topbar-account small {
+.topbar-account > .account-details small {
   display: block;
   font-size: 0.65rem;
 }
@@ -263,4 +263,22 @@ nav[aria-label='Main navigation'] a svg {
 }
 .skip-link:focus {
   top: 12px;
+}
+
+/* Header controls remain reachable at 320px; long page titles may truncate. */
+.topbar-title {
+  min-width: 0;
+  flex: 1;
+}
+.breadcrumb {
+  min-width: 0;
+}
+.breadcrumb strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar-account,
+.mobile-menu {
+  flex-shrink: 0;
 }

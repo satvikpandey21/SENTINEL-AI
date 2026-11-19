@@ -1,0 +1,95 @@
+# Production override; requires Docker Compose >=2.24.4 for !reset / !override.
+services:
+  postgres:
+    mem_limit: 768m
+    cpus: 1.0
+  redis:
+    mem_limit: 128m
+    cpus: 0.5
+  rabbitmq:
+    mem_limit: 512m
+    cpus: 1.0
+  admin-api:
+    ports: !reset []
+    environment:
+      SENTINEL_ENVIRONMENT: production
+      SENTINEL_ADMIN_DEPLOYMENT: production
+      SENTINEL_ADMIN_COOKIE_SECURE: "true"
+      SENTINEL_ADMIN_ALLOWED_ORIGINS: '["${SENTINEL_PUBLIC_ORIGIN:?Initialize production environment}"]'
+      SENTINEL_TRUSTED_PROXY_CIDRS: '["172.30.90.2/32"]'
+    networks: !override
+      backend:
+      telemetry:
+      edge:
+        ipv4_address: 172.30.90.3
+    mem_limit: 512m
+    cpus: 1.0
+  demo-api:
+    environment:
+      SENTINEL_ENVIRONMENT: production
+      SENTINEL_DEMO_AUTH_ENABLED: "false"
+      SENTINEL_TRUSTED_PROXY_CIDRS: '[]'
+    mem_limit: 256m
+    cpus: 0.5
+  event-worker:
+    environment:
+      SENTINEL_ENVIRONMENT: production
+    mem_limit: 512m
+    cpus: 1.0
+  migrate:
+    environment:
+      SENTINEL_ENVIRONMENT: production
+  ingress:
+    image: ${SENTINEL_INGRESS_IMAGE:-sentinel-ai-ingress:0.1.0}
+    build:
+      context: .
+      dockerfile: infra/deploy/Dockerfile
+    environment:
+      SENTINEL_HOST: ${SENTINEL_HOST:?Configure public DNS hostname}
+      GOMEMLIMIT: 128MiB
+    ports: ['0.0.0.0:80:80', '0.0.0.0:443:443']
+    networks:
+      ingress:
+      edge:
+        ipv4_address: 172.30.90.2
+    volumes: [caddy_data:/data, caddy_config:/config]
+    read_only: true
+    tmpfs: [/tmp]
+    user: '10001:10001'
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: '0'
+    mem_limit: 256m
+    cpus: 0.5
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, -qO-, 'http://127.0.0.1:8081/health/ingress']
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    depends_on:
+      admin-api:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+networks:
+  edge:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.90.0/28
+volumes:
+  caddy_data:
+  caddy_config:
+secrets:
+  metrics_token:
+    file: ${SENTINEL_DEPLOYMENT_SECRETS_DIR:?Initialize production secrets}/metrics_token
+  grafana_password:
+    file: ${SENTINEL_DEPLOYMENT_SECRETS_DIR:?Initialize production secrets}/grafana_password
+  rabbitmq_metrics_password:
+    file: ${SENTINEL_DEPLOYMENT_SECRETS_DIR:?Initialize production secrets}/rabbitmq_metrics_password
+  rabbitmq_management_password:
+    file: ${SENTINEL_DEPLOYMENT_SECRETS_DIR:?Initialize production secrets}/rabbitmq_management_password

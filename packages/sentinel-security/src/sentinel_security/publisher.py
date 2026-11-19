@@ -23,6 +23,7 @@ class PublisherStats:
 class EventPublisher:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.metrics = None
         self.stats = PublisherStats()
         self.queue: asyncio.Queue[tuple[bytes, str]] = asyncio.Queue(settings.event_buffer_capacity)
         self._task: asyncio.Task | None = None
@@ -41,6 +42,8 @@ class EventPublisher:
 
     def _drop(self, reason: str) -> None:
         self.stats.dropped += 1
+        if self.metrics is not None:
+            self.metrics.inc("publisher_dropped", reason=reason)
         if monotonic() - self._last_loss_log >= 30:
             self._last_loss_log = monotonic()
             structlog.get_logger().warning(
@@ -62,6 +65,9 @@ class EventPublisher:
             self._drop("buffer_full")
             return False
         self.stats.accepted += 1
+        if self.metrics is not None:
+            self.metrics.inc("publisher_accepted")
+            self.metrics.set("publisher_buffer", self.queue.qsize())
         return True
 
     async def _connect(self) -> None:
@@ -77,8 +83,12 @@ class EventPublisher:
             publisher_confirms=True, on_return_raises=True
         )
         await declare_topology(self._channel, self.settings)
+        if self.metrics is not None:
+            self.metrics.set("publisher_connected", 1)
 
     async def _disconnect(self) -> None:
+        if self.metrics is not None:
+            self.metrics.set("publisher_connected", 0)
         connection, self._connection, self._channel = self._connection, None, None
         if connection is not None:
             try:
@@ -101,14 +111,20 @@ class EventPublisher:
                         timeout=self.settings.event_operation_timeout_seconds,
                     )
                 self.stats.published += 1
+                if self.metrics is not None:
+                    self.metrics.inc("publisher_published")
                 return True
             except Exception as error:
                 self.stats.publish_failures += 1
+                if self.metrics is not None:
+                    self.metrics.inc("publisher_failures")
                 structlog.get_logger().warning(
                     "event_publish_failed", error_type=type(error).__name__, attempt=attempt + 1
                 )
                 await self._disconnect()
                 if attempt + 1 < self.settings.event_publish_attempts:
+                    if self.metrics is not None:
+                        self.metrics.inc("publisher_retries")
                     await asyncio.sleep(
                         min(5.0, self.settings.event_retry_delay_seconds * 2**attempt)
                     )
@@ -117,6 +133,8 @@ class EventPublisher:
     async def _run(self) -> None:
         while True:
             body, message_id = await self.queue.get()
+            if self.metrics is not None:
+                self.metrics.set("publisher_buffer", self.queue.qsize())
             try:
                 if not await self._deliver(body, message_id):
                     self._drop("publish_attempts_exhausted")

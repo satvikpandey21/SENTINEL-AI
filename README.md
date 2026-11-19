@@ -1,6 +1,6 @@
 # SENTINEL AI
 
-Intelligent API Security & Threat Detection Platform. Development window: **November 12-20, 2026**. This repository implements **Phases 1-6: monitoring, distributed protection, explainable threat analysis, secure administrative APIs, and a React security dashboard**.
+Intelligent API Security & Threat Detection Platform. Development window: **November 12-20, 2026**. This repository implements **Phases 1-9: monitoring, distributed protection, explainable threat analysis, secure administrative APIs, a React dashboard with authenticated real-time notifications, and private Prometheus/Grafana observability**.
 
 ## Working functionality
 
@@ -15,9 +15,10 @@ Intelligent API Security & Threat Detection Platform. Development window: **Nove
 - Worker-side, transactional 0-100 risk assessments, bounded behavioral windows, robust statistical baselines, and an experimental Isolation Forest trained with Scikit-learn.
 - Argon2id administrative passwords, strict short-lived JWTs, rotating hashed refresh tokens, CSRF/Origin protection, role enforcement, account management, and persistent administrative audits.
 - Authenticated event/assessment/client APIs, real dashboard aggregates, and versioned policies activated in shared Redis with write fencing.
+- Ticket-authenticated WebSocket notifications, distributed connection limits, session revalidation and a local notification center.
 - Digest-pinned service images, locked Python dependencies with artifact hashes, Ruff formatting/linting, Pytest unit/integration coverage, and CI.
 
-**Security scope:** The demo has real Redis-backed limits and temporary restrictions, a deliberately test-only login, and an isolated network boundary. Administrative event/assessment/analytics APIs require revocable administrator or analyst sessions; policy, account, and audit operations enforce administrator permissions. Assessments contain observed features, grouped risk contributions, rule evidence, and explicit statistical/ML availability. Experimental ML adds evidence and cannot block clients or raise risk scores. The React dashboard uses the authenticated APIs. WebSockets, Prometheus, and Grafana remain future work. Backend dashboard analytics are implemented against PostgreSQL.
+**Security scope:** The demo has real Redis-backed limits and temporary restrictions, a deliberately test-only login, and an isolated network boundary. Administrative event/assessment/analytics APIs require revocable administrator or analyst sessions; policy, account, and audit operations enforce administrator permissions. Assessments contain observed features, grouped risk contributions, rule evidence, and explicit statistical/ML availability. Experimental ML adds evidence and cannot block clients or raise risk scores. The React dashboard uses the authenticated APIs. Authenticated WebSockets deliver post-commit hints with REST reconciliation. Private authenticated metrics, native broker observations, five provisioned Grafana dashboards and nine operational Prometheus alerts are implemented. Backend dashboard analytics are implemented against PostgreSQL.
 
 ## Architecture
 
@@ -36,6 +37,11 @@ flowchart LR
     Worker -->|confirmed quarantine| Dead[Bounded dead-letter queue]
     Admin -->|bounded queries, accounts, sessions, audit and policy revisions| PG
     Admin -->|fenced policy activation| Redis
+    PG -->|committed-event hints| Notify[Bounded Redis notification publisher]
+    Notify --> Redis
+    Redis -->|Pub/Sub hints| Admin
+    Admin -->|ticket-authenticated WebSocket| Dashboard[React security dashboard]
+    Dashboard -->|authoritative REST reconciliation| Admin
     Migration[One-shot Alembic service] --> PG
 ```
 
@@ -48,7 +54,7 @@ Middleware runs bounded asynchronous Redis checks, then offers validated HTTP/de
 - Docker Engine/Desktop using **Linux containers**, and Docker Compose v2+.
 - Python **3.11** for local development and environment initialization.
 - Git. The optional dashboard requires Node.js 22.12+ (Node 24 used for verification) and npm.
-- Free localhost port 8000. The optional development override also uses 8001, 5432, 6379, 5672, and 15672.
+- Free localhost ports 8000 and 3000 (Grafana). The optional development override also uses 8001, 5432, 6379, 5672, and 15672.
 
 ## Start the complete stack
 
@@ -231,7 +237,7 @@ requirements-ml.in           # offline training/test inputs
 .env.example
 ```
 
-WebSockets and Prometheus/Grafana remain future milestones. Production assessments use observed telemetry. Synthetic data is confined to the explicitly experimental offline ML benchmark; training dependencies are excluded from runtime images.
+Authenticated real-time streaming is implemented in Phase 7. Prometheus/Grafana remain future milestones. Production assessments use observed telemetry. Synthetic data is confined to the explicitly experimental offline ML benchmark; training dependencies are excluded from runtime images.
 
 See the historical [Day 1 verification record](docs/day-1-verification.md) and [Day 2 verification record](docs/day-2-verification.md) and [Phase 3 verification record](docs/day-3-verification.md) and current [Phase 4 verification record](docs/day-4-verification.md) for executed checks and the Windows native-extension limitation.
 
@@ -472,3 +478,102 @@ credential storage file, browser trace, or authentication secret is created in r
 Current browsers with Web Locks and BroadcastChannel are required for cross-tab session
 coordination. Automatic polling is limited to the Overview (60 seconds, paused while hidden).
 Manual visual acceptance remains for the dedicated local testing session.
+
+### Phase 7 live security monitoring
+
+The console now receives post-commit event/assessment hints over an authenticated WebSocket.
+The existing Redis service distributes hints across administrative replicas. PostgreSQL remains
+the source of truth; notifications are best effort and REST reconciles after every reconnect.
+The bell shows a bounded, tab-local notification history and real connection status. Overview
+metrics refresh in batches. Events and Threat Intelligence preserve investigation filters,
+pagination and detail dialogs and offer a new-activity refresh control. Routine activity is
+informational and opt-in; there are no sample attacks or routine popups.
+
+Use the standard stack and Vite proxy; no database, Redis, RabbitMQ or demo host bindings:
+
+```powershell
+docker compose up --build -d --wait --wait-timeout 180
+cd apps/dashboard
+npm.cmd run dev
+```
+
+Open http://localhost:5173 with the existing local development Origin/cookie settings.
+Vite forwards both HTTP and WebSocket `/api/admin` traffic without changing Origin.
+Production requires same-site HTTPS/WSS, WebSocket upgrade forwarding, exact allowed origins,
+Secure refresh cookies and proxy header/log redaction. Never place access/refresh tokens in
+WebSocket URLs or browser storage. Tickets last 20 seconds and are consumed once.
+
+See [Phase 7 verification](docs/day-7-verification.md) for measured results, fault recovery,
+resource limits and exact verification commands. The versioned notification schema lives in
+[docs/security-notification-v1.schema.json](docs/security-notification-v1.schema.json).
+
+## Phase 8 operational observability
+
+Keep the existing `.env` and persistent data. For an existing workspace, initialize the
+independent metrics/Grafana/broker-monitoring secrets once, then use the standard workflow:
+
+```powershell
+python scripts/init_observability.py
+docker compose up --build -d --wait --wait-timeout 180
+```
+
+Grafana: **http://localhost:3000**, username **sentinel-ops**, generated password in
+`.secrets/observability/grafana_password`. Grafana accounts are separate from Sentinel's
+ADMIN/ANALYST accounts. Five dashboards and the internal Prometheus data source provision
+automatically. Prometheus has **no host binding**; use Grafana Explore or the internal Docker
+URL `http://prometheus:9090`. Authenticated application scrape listeners on port 9100 and
+RabbitMQ's native listener on 15692 are private. Public API `/metrics` returns 404.
+No database/broker host ports or development Compose override are needed.
+
+Applications and the event worker report actual request duration/status, security decisions,
+publisher confirmations/drops, commit/processing outcomes, analysis performance, WebSocket
+connections and notification backpressure. Labels exclude client identities and secrets.
+Prometheus retains 7 days / 1 GiB of metric blocks; Prometheus and Grafana each have a
+512 MiB / 1 CPU container cap. Nine operational rules evaluate in Prometheus without external
+notification delivery and remain separate from the React security notification center.
+
+Continue using `cd apps/dashboard` and `npm.cmd run dev` for http://localhost:5173.
+The existing security dashboard is preserved. See [observability operations and inventory](docs/observability.md),
+[architecture](docs/architecture.md#phase-8-private-operational-observability), and
+[executed Phase 8 verification](docs/day-8-verification.md) for commands, alert thresholds,
+resource/performance measurements and limitations.
+
+
+## Phase 9 final integration and deployment
+
+Notification controls remain visible at 320px and above across all seven authenticated
+pages. Header CSS now targets only account details and shell buttons; notification dialogs,
+action buttons and severity badges retain their own layout. The authenticated bounded
+WebSocket stays active in online background tabs. Returning to a tab still reconciles REST;
+offline/browser-suspended intervals can lose best-effort hints. Informational opt-in applies
+to future activity, and reloading does not fabricate historical bell notifications.
+
+The production configuration serves the built React application and authenticated APIs
+through one Caddy HTTPS/WSS ingress. It enforces Secure cookies, exact HTTPS Origin, a fixed
+trusted proxy /32, private data/metrics networks and loopback-only Grafana. The demo login is
+disabled and the demo API is not publicly routed. Persistent volumes and migrations remain.
+The existing local development commands above are unchanged.
+
+For an isolated local production-topology test with independent credentials and volumes:
+
+```powershell
+python scripts/init_production.py --origin https://localhost:8443 --local-test
+python scripts/deploy.py up --env-file .env.production-test --project sentinel-production-test --mode local-test
+python scripts/verify_deployment.py --fault-check
+```
+
+This uses a private test CA, not publicly trusted HTTPS. No public deployment occurred.
+For a Linux VM and DNS hostname you control:
+
+```sh
+python scripts/init_production.py --origin https://sentinel.your-domain.example
+python scripts/deploy.py validate
+python scripts/deploy.py up
+```
+
+See [deployment-guide.md](docs/deployment-guide.md) for prerequisites, exact environment and
+bootstrap commands, free-hosting limits, a separately labeled temporary-tunnel fallback,
+backup/restore and rollback. [day-9-verification.md](docs/day-9-verification.md) records final
+results, defects, source changes and remaining external prerequisites. Package the complete
+current uncommitted source with `python scripts/package_release.py .artifacts/release.zip`;
+`git archive HEAD` would omit Phases 7?9. Nothing was committed or pushed automatically.

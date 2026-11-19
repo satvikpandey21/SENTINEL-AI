@@ -8,7 +8,7 @@ export default defineConfig(({ mode }) => {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
     throw new Error('Proxy target must be an HTTP(S) origin without credentials');
   }
-  const proxy = { '/api/admin': { target, changeOrigin: false } };
+  const proxy = { '/api/admin': { target, changeOrigin: false, ws: true } };
   return {
     plugins: [react()],
     server: { host: 'localhost', port: 5173, strictPort: true, allowedHosts: ['localhost'], proxy },

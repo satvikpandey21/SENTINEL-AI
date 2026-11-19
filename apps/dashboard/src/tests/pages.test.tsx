@@ -1,5 +1,6 @@
+import { TestLiveSocket, liveTicket, liveActivity } from './live';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Outlet, Route, Routes } from 'react-router';
 import type { ReactNode } from 'react';
@@ -253,5 +254,89 @@ describe('actual-contract page rendering', () => {
     expect(screen.getByText('Ready to investigate')).toBeInTheDocument();
     expect(screen.getByText(/One identifier may be shared/)).toBeInTheDocument();
     expect(fetcher.mock.calls.some(([url]) => String(url).includes('/clients/'))).toBe(false);
+  });
+});
+
+describe('live dashboard integration', () => {
+  async function liveMount(node: ReactNode, handle: (path: string) => Response) {
+    TestLiveSocket.instances = [];
+    vi.stubGlobal('WebSocket', TestLiveSocket);
+    const result = await mount(node, {
+      handle: (path) => (path.endsWith('/ws/v1/ticket') ? json(liveTicket) : handle(path)),
+    });
+    await waitFor(() => expect(TestLiveSocket.instances).toHaveLength(1));
+    const socket = TestLiveSocket.instances[0]!;
+    await act(async () => socket.message({ schema_version: 1, type: 'connection.ready' }));
+    return { ...result, socket };
+  }
+  it('presents accessible local alerts, unread count, mark-read and clear behavior', async () => {
+    const { socket, session } = await liveMount(<AppLayout />, () => json({}));
+    await act(async () => {
+      socket.message(liveActivity);
+      socket.message(liveActivity);
+    });
+    expect(screen.getByRole('status', { name: 'Security stream: Connected' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Notifications, 1 unread' }));
+    const dialog = screen.getByRole('dialog', { name: 'Security notifications' });
+    expect(within(dialog).getAllByRole('link', { name: 'Inspect event' })).toHaveLength(1);
+    expect(within(dialog).getByText(/local to this tab/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Mark all as read' }));
+    expect(screen.getByRole('button', { name: 'Notifications, 0 unread' })).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Clear history' }));
+    expect(within(dialog).getByText('No notifications received in this tab.')).toBeInTheDocument();
+    await act(async () => session.invalidate());
+    expect(socket.close).toHaveBeenCalled();
+  });
+  it('preserves event filters, pagination and open details until authoritative refresh', async () => {
+    const { socket, fetcher } = await liveMount(<EventsPage />, (path) =>
+      json(path.includes('/events/') ? event : page([event], 51)),
+    );
+    await screen.findByText('/api/demo/ping');
+    fireEvent.change(screen.getByLabelText('Service'), { target: { value: 'sentinel-demo-api' } });
+    await userEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await userEvent.click(await screen.findByRole('button', { name: /Inspect event/ }));
+    await act(async () => socket.message(liveActivity));
+    await screen.findByRole('button', { name: 'Refresh selected window' }, { timeout: 4000 });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByLabelText('Service')).toHaveValue('sentinel-demo-api');
+    await act(async () => socket.message({ schema_version: 1, type: 'connection.ready' }));
+    await waitFor(() => expect(fetcher.mock.calls.at(-1)?.[0]).toContain('offset=25'));
+    expect(fetcher.mock.calls.at(-1)?.[0]).toContain('service=sentinel-demo-api');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+  it('batches overview analytics and keeps the selected range during reconnect', async () => {
+    const { socket, fetcher } = await liveMount(<OverviewPage />, () => json(analytics));
+    await screen.findByText('Monitored requests');
+    const before = fetcher.mock.calls.filter(([p]) => String(p).includes('/analytics')).length;
+    await act(async () => {
+      for (let n = 0; n < 20; n++) {
+        const id = `22222222-2222-4222-8222-${String(n).padStart(12, '0')}`;
+        socket.message({ ...liveActivity, event_id: id, notification_id: id });
+      }
+    });
+    await waitFor(
+      () =>
+        expect(fetcher.mock.calls.filter(([p]) => String(p).includes('/analytics')).length).toBe(
+          before + 1,
+        ),
+      { timeout: 4000 },
+    );
+    expect(screen.getByText('Monitored requests')).toBeInTheDocument();
+  });
+  it('preserves threat severity and ML evidence when new assessments arrive', async () => {
+    const { socket } = await liveMount(<ThreatsPage />, (path) =>
+      json(path.includes('/assessments/') ? assessment : page([assessment], 51)),
+    );
+    await screen.findByRole('button', { name: /Evidence for/ });
+    fireEvent.change(screen.getByLabelText('Severity'), { target: { value: 'high' } });
+    await userEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+    await act(async () => socket.message(liveActivity));
+    await screen.findByRole('button', { name: 'Refresh selected window' }, { timeout: 4000 });
+    expect(screen.getByLabelText('Severity')).toHaveValue('high');
+    expect(
+      screen.getByText('Risk is an assessment score, not an attack probability.'),
+    ).toBeInTheDocument();
   });
 });

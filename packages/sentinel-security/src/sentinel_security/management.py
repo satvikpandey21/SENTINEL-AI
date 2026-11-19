@@ -80,6 +80,20 @@ class PolicyCoordinator:
         )
 
     async def write(self, *, policies=None, expected=None, actor=None):
+        outcome = "error"
+        try:
+            result = await self._write(policies=policies, expected=expected, actor=actor)
+            outcome = "success"
+            return result
+        except PolicyConflict:
+            outcome = "conflict"
+            raise
+        finally:
+            metrics = getattr(self.resources, "metrics", None)
+            if metrics is not None:
+                metrics.inc("policy_operations", operation="write", outcome=outcome)
+
+    async def _write(self, *, policies=None, expected=None, actor=None):
         """Reconcile when policies is None; otherwise append a validated CAS revision."""
         if policies is not None:
             validate_policies(tuple(policies))

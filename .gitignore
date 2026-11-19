@@ -39,3 +39,5 @@ Desktop.ini
 .artifacts/
 test-results/
 playwright-report/
+# Private observability credentials (generated locally; never commit).
+.secrets/

@@ -24,11 +24,17 @@ export function windowFor(range: Range, now = new Date()): TimeWindow {
 export function useWindow(initial: Range = '24h') {
   const [range, setRange] = useState<Range>(initial);
   const [window, setWindow] = useState(() => windowFor(initial));
+  const [custom, setCustom] = useState(false);
   return {
     range,
     window,
-    setWindow,
+    custom,
+    setWindow: (value: TimeWindow) => {
+      setCustom(true);
+      setWindow(value);
+    },
     changeRange: (next: Range) => {
+      setCustom(false);
       setRange(next);
       setWindow(windowFor(next));
     },

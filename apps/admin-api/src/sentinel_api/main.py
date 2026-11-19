@@ -9,9 +9,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
 
 from sentinel_api.auth import HASHER
 from sentinel_api.auth_routes import router as auth_router
+from sentinel_api.realtime import SecurityHub
+from sentinel_api.realtime import router as realtime_router
 from sentinel_api.routes import router
 from sentinel_api.schemas import ErrorOut
 from sentinel_api.settings import AdminSettings
@@ -38,7 +41,11 @@ def create_app(settings=None, admin_settings=None, resource_factory=Resources):
             HASHER.hash, secrets.token_urlsafe(32)
         )
         async with original_lifespan(application):
-            yield
+            async with SecurityHub(
+                application.state.resources.redis, admin_settings, application.state.metrics
+            ) as hub:
+                application.state.security_hub = hub
+                yield
 
     app.router.lifespan_context = lifespan
     app.add_middleware(
@@ -91,9 +98,11 @@ def create_app(settings=None, admin_settings=None, resource_factory=Resources):
             headers={"Cache-Control": "no-store"},
         )
 
-    app.add_exception_handler(RedisError, unavailable)
+    for error_type in (RedisError, SQLAlchemyError, TimeoutError, OSError):
+        app.add_exception_handler(error_type, unavailable)
     app.add_exception_handler(PolicyUnavailable, unavailable)
     errors = {code: {"model": ErrorOut} for code in (401, 403, 404, 409, 422, 429, 503)}
     app.include_router(auth_router, prefix="/api/admin", responses=errors)
     app.include_router(router, prefix="/api/admin", responses=errors)
+    app.include_router(realtime_router, prefix="/api/admin", responses=errors)
     return app

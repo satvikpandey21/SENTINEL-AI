@@ -1,0 +1,30 @@
+{
+    admin off
+    log default {
+        format filter {
+            wrap json
+            fields {
+                request delete
+                headers delete
+            }
+        }
+    }
+    servers {
+        max_header_size 16KB
+        timeouts {
+            read_header 10s
+            read_body 15s
+            idle 2m
+        }
+    }
+    skip_install_trust
+}
+import /etc/caddy/common.caddy
+https://localhost {
+    tls internal
+    import sentinel
+}
+
+http://:8081 {
+    respond /health/ingress "ready" 200
+}

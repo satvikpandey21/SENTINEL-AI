@@ -1,0 +1,40 @@
+(sentinel) {
+    encode zstd gzip
+    header {
+        -Server
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        Strict-Transport-Security "max-age=31536000"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss://{http.request.host}; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    }
+    request_body {
+        max_size 64KB
+    }
+    handle /health/ingress {
+        respond "ready" 200
+    }
+    handle /api/admin/* {
+        reverse_proxy admin-api:8000 {
+            # Discard caller-supplied peer chains; only this fixed proxy is trusted by FastAPI.
+            header_up X-Forwarded-For {remote_host}
+            header_up -Forwarded
+        }
+    }
+    handle /api/* {
+        respond 404
+    }
+    handle /metrics* {
+        respond 404
+    }
+    handle /health/* {
+        respond 404
+    }
+    handle {
+        root * /srv
+        try_files {path} /index.html
+        header Cache-Control "no-cache"
+        file_server
+    }
+    # No access log: credentials, WebSocket subprotocols, URLs and client IPs are not recorded.
+}

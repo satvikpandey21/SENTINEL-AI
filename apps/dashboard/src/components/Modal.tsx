@@ -33,6 +33,26 @@ export function Modal({
       ref={ref}
       aria-labelledby={titleId}
       aria-describedby={description ? descriptionId : undefined}
+      onKeyDown={(event) => {
+        if (event.key !== 'Tab') return;
+        const dialog = event.currentTarget;
+        const controls = [
+          ...dialog.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+          ),
+        ].filter((element) => element.getClientRects().length > 0);
+        const first = controls[0];
+        const last = controls.at(-1);
+        if (!first || !last) return;
+        const outside = !dialog.contains(document.activeElement);
+        if (event.shiftKey && (document.activeElement === first || outside)) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || outside)) {
+          event.preventDefault();
+          first.focus();
+        }
+      }}
       onCancel={(event) => {
         event.preventDefault();
         onClose();

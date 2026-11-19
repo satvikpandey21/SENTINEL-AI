@@ -21,6 +21,15 @@ class AdminSettings(BaseSettings):
     allowed_origins: tuple[str, ...] = ("https://localhost",)
     login_attempts: int = Field(default=10, ge=3, le=30)
     login_window_seconds: int = Field(default=300, ge=30, le=3600)
+    ws_ticket_seconds: int = Field(default=20, ge=5, le=60)
+    ws_ticket_limit: int = Field(default=12, ge=2, le=60)
+    ws_max_connections: int = Field(default=128, ge=1, le=1024)
+    ws_account_connections: int = Field(default=8, ge=1, le=32)
+    ws_session_connections: int = Field(default=4, ge=1, le=16)
+    ws_queue_capacity: int = Field(default=32, ge=1, le=256)
+    ws_heartbeat_seconds: float = Field(default=20, ge=1, le=30)
+    ws_revalidate_seconds: float = Field(default=15, ge=0.1, le=30)
+    ws_idle_seconds: float = Field(default=60, ge=5, le=120)
 
     @field_validator("signing_key")
     @classmethod
@@ -32,6 +41,8 @@ class AdminSettings(BaseSettings):
 
     @model_validator(mode="after")
     def browser_boundary(self):
+        if self.ws_idle_seconds < self.ws_heartbeat_seconds * 2:
+            raise ValueError("WebSocket idle interval must cover two heartbeats")
         if not self.allowed_origins or len(self.allowed_origins) > 8:
             raise ValueError("configure 1..8 explicit frontend origins")
         for origin in self.allowed_origins:

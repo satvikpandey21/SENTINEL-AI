@@ -10,6 +10,8 @@ from sentinel_security.analysis_storage import AnalysisEngine, cleanup_analysis
 from sentinel_security.config import Settings
 from sentinel_security.infrastructure import Resources
 from sentinel_security.messaging import declare_topology
+from sentinel_security.metrics import Metrics, metrics_runtime
+from sentinel_security.realtime import NotificationPublisher
 from sentinel_security.storage import EventStore
 from sentinel_worker.consumer import EventConsumer
 from sentinel_worker.healthcheck import write_health
@@ -35,6 +37,9 @@ async def heartbeat(resources: Resources, stop: asyncio.Event) -> None:
                 "worker_database_unavailable", error_type=type(error).__name__
             )
         write_health(ready)
+        metrics = getattr(resources, "metrics", None)
+        if metrics is not None:
+            metrics.set("worker_ready", int(ready))
         try:
             await asyncio.wait_for(stop.wait(), timeout=3)
         except TimeoutError:
@@ -54,7 +59,15 @@ async def consume_connection(connection, resources: Resources, stop: asyncio.Eve
         await channel.set_qos(prefetch_count=settings.worker_prefetch)
         queue = await declare_topology(channel, settings)
     consumer = EventConsumer(
-        EventStore(resources.session_factory, resources.analysis), channel, settings
+        EventStore(
+            resources.session_factory,
+            resources.analysis,
+            resources.notifications,
+            resources.metrics,
+        ),
+        channel,
+        settings,
+        metrics=resources.metrics,
     )
     consume_task = asyncio.create_task(consume(queue, consumer))
     health_task = asyncio.create_task(heartbeat(resources, stop))
@@ -77,8 +90,23 @@ async def consume_connection(connection, resources: Resources, stop: asyncio.Eve
 
 async def run_worker(settings: Settings, stop: asyncio.Event) -> None:
     write_health(False)
-    async with Resources(settings) as resources:
-        resources.analysis = AnalysisEngine(settings.analysis)
+    metrics = Metrics("sentinel-event-worker", enabled=settings.metrics_enabled, component="worker")
+    from contextlib import AsyncExitStack
+
+    async with (
+        Resources(settings) as resources,
+        AsyncExitStack() as observability,
+        NotificationPublisher(
+            resources.redis,
+            settings.realtime_buffer_capacity,
+            settings.realtime_publish_timeout_seconds,
+            metrics=metrics,
+        ) as notifications,
+    ):
+        resources.metrics = metrics
+        resources.notifications = notifications
+        resources.analysis = AnalysisEngine(settings.analysis, metrics=metrics)
+        await observability.enter_async_context(metrics_runtime(metrics, settings, resources))
         while not stop.is_set():
             connection = None
             try:
@@ -86,13 +114,17 @@ async def run_worker(settings: Settings, stop: asyncio.Event) -> None:
                     settings.rabbitmq_url.get_secret_value(),
                     timeout=settings.event_operation_timeout_seconds,
                 )
+                metrics.set("worker_connected", 1)
                 structlog.get_logger().info("worker_connected")
                 await consume_connection(connection, resources, stop)
             except Exception as error:
+                metrics.inc("worker_reconnects")
                 structlog.get_logger().warning(
                     "worker_disconnected", error_type=type(error).__name__
                 )
             finally:
+                metrics.set("worker_connected", 0)
+                metrics.set("worker_ready", 0)
                 write_health(False)
                 if connection is not None:
                     try:

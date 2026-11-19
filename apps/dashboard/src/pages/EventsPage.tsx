@@ -1,9 +1,10 @@
+import { NewActivity, useLiveRefresh } from '../realtime/LiveActivity';
 import { useState } from 'react';
 import { useLocation } from 'react-router';
 import type { EventQuery } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { useResource } from '../hooks/useResource';
-import { useWindow, dateTime } from '../utils/format';
+import { useWindow, windowFor, dateTime } from '../utils/format';
 import { CustomWindow, Field, FilterBar, TimeFilter, validWindow } from '../components/Filters';
 import { EventTable } from '../components/EventTable';
 import { EventDetail } from '../components/Details';
@@ -23,6 +24,7 @@ function EventsExplorer({ search }: { search: string }) {
   const [draft, setDraft] = useState<EventQuery>(initial);
   const scope = useWindow();
   const [applied, setApplied] = useState<EventQuery>({ ...initial, ...scope.window });
+  const [appliedRange, setAppliedRange] = useState<import('../utils/format').Range | null>('24h');
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<string | null>(params.get('event'));
   const [invalid, setInvalid] = useState('');
@@ -30,6 +32,15 @@ function EventsExplorer({ search }: { search: string }) {
   const result = useResource('events:' + JSON.stringify(query), (signal) =>
     api.events(query, signal),
   );
+  const liveRefresh = () => {
+    if (appliedRange) setApplied((old) => ({ ...old, ...windowFor(appliedRange) }));
+    else result.refresh();
+  };
+  const live = useLiveRefresh(liveRefresh, false, false);
+  const refreshLive = () => {
+    live.acknowledge();
+    liveRefresh();
+  };
   const field = <K extends keyof EventQuery>(key: K, value: EventQuery[K]) =>
     setDraft((old) => ({ ...old, [key]: value || undefined }));
   return (
@@ -42,9 +53,10 @@ function EventsExplorer({ search }: { search: string }) {
         <RefreshControl
           loading={result.loading}
           updatedAt={result.updatedAt}
-          onRefresh={result.refresh}
+          onRefresh={refreshLive}
         />
       </PageHeading>
+      <NewActivity pending={live.pending} refresh={refreshLive} assessments={false} />
       <FilterBar
         onSubmit={(event) => {
           event.preventDefault();
@@ -53,10 +65,14 @@ function EventsExplorer({ search }: { search: string }) {
             return;
           }
           setInvalid('');
+          setAppliedRange(scope.custom ? null : scope.range);
+          live.acknowledge();
           setApplied({ ...draft, ...scope.window });
           setOffset(0);
         }}
         onReset={() => {
+          setAppliedRange('24h');
+          live.acknowledge();
           setDraft({});
           scope.changeRange('24h');
           setApplied({ ...defaultWindow() });

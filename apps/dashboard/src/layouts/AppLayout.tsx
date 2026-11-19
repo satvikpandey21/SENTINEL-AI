@@ -14,6 +14,7 @@ import {
   ShieldEllipsis,
   ScrollText,
 } from 'lucide-react';
+import { NotificationCenter } from '../realtime/NotificationCenter';
 import { useAuth } from '../auth/AuthProvider';
 import { Modal } from '../components/Modal';
 import { Badge } from '../components/UI';
@@ -110,10 +111,11 @@ export default function AppLayout() {
             </span>
           </div>
           <div className="topbar-account">
+            <NotificationCenter />
             <span className="account-avatar">
               {state.account?.username.slice(0, 2).toUpperCase()}
             </span>
-            <div>
+            <div className="account-details">
               <strong>{state.account?.username}</strong>
               <small>
                 {state.account?.role === 'ADMIN' ? 'Administrator' : 'Security analyst'}

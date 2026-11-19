@@ -11,6 +11,7 @@ from sentinel_security.config import Settings
 from sentinel_security.infrastructure import Resources
 from sentinel_security.logging import configure_logging
 from sentinel_security.management import PolicyCoordinator
+from sentinel_security.metrics import Metrics, metrics_runtime
 from sentinel_security.middleware import RequestContextMiddleware
 from sentinel_security.policy_runtime import load_effective
 from sentinel_security.protection import RedisProtectionStore, SecurityEngine
@@ -25,13 +26,38 @@ def create_application(
 ) -> FastAPI:
     settings = settings or Settings()
     configure_logging(settings.log_level)
+    metrics = Metrics(
+        service,
+        enabled=settings.metrics_enabled,
+        component="admin-api" if service == "sentinel-admin-api" else "api",
+    )
     publisher = publisher_factory(settings) if settings.monitoring_enabled else None
+
+    if publisher is not None:
+        publisher.metrics = metrics
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         async with AsyncExitStack() as stack:
             resources = await stack.enter_async_context(resource_factory(settings))
             app.state.resources = resources
+            resources.metrics = metrics
+            # Include nested router paths as well as fully prefixed paths; never label raw URLs.
+            known = set()
+
+            def paths(router):
+                for route in getattr(router, "routes", ()):
+                    value = getattr(route, "path", None)
+                    if isinstance(value, str):
+                        known.add(value)
+                    paths(route)
+                    nested = getattr(route, "router", None)
+                    if nested is not None:
+                        paths(nested)
+
+            paths(app.router)
+            metrics.routes = frozenset(sorted(known)[:64])
+            await stack.enter_async_context(metrics_runtime(metrics, settings, resources))
             if settings.dynamic_policies:
                 await PolicyCoordinator(resources, settings.effective_policies).write()
             if publisher is not None:
@@ -52,18 +78,23 @@ def create_application(
         openapi_url="/openapi.json" if settings.environment == "development" else None,
     )
     app.state.settings = settings
+    app.state.metrics = metrics
     app.add_middleware(
         RequestContextMiddleware,
         trusted_proxy_cidrs=settings.trusted_proxy_cidrs,
         service=service,
         event_sink=publisher,
+        metrics=metrics,
         security_engine=(
             SecurityEngine(
                 RedisProtectionStore(
-                    lambda: app.state.resources.redis, settings.protection_redis_timeout_seconds
+                    lambda: app.state.resources.redis,
+                    settings.protection_redis_timeout_seconds,
+                    metrics=metrics,
                 ),
                 service,
                 settings.effective_policies,
+                metrics=metrics,
                 policy_loader=(lambda: load_effective(app.state.resources.redis))
                 if settings.dynamic_policies
                 else None,

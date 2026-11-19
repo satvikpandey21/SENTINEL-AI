@@ -151,6 +151,9 @@ async def test_two_demo_instances_share_limits_and_ignore_spoofed_headers(backin
         **{
             **resources.settings.model_dump(),
             "protection_enabled": True,
+            # This checks atomicity; allow instrumented in-process setup to finish.
+            # Production retains its 200 ms deadline; timeout policy has separate tests.
+            "protection_redis_timeout_seconds": 1.0,
             "client_identity_key": "c" * 64,
             "protection_policies": (policy,),
         }

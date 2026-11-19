@@ -49,6 +49,7 @@ class RequestContextMiddleware:
         event_sink: EventSink | None = None,
         security_engine: SecurityEngine | None = None,
         identity_key: bytes | None = None,
+        metrics=None,
         excluded_paths: tuple[str, ...] = ("/health", "/docs", "/openapi.json"),
     ) -> None:
         if (event_sink is not None or security_engine is not None) and (
@@ -62,6 +63,7 @@ class RequestContextMiddleware:
         )
         self.trusted_proxy_cidrs = trusted_proxy_cidrs
         self.service = service
+        self.metrics = metrics
         self.event_sink = event_sink
         self.identity_key = identity_key
         self.excluded_paths = excluded_paths
@@ -100,7 +102,10 @@ class RequestContextMiddleware:
             raise
         finally:
             # Log the registered route template only: raw paths may contain sensitive values.
-            elapsed_ms = round((perf_counter() - start) * 1000, 3)
+            elapsed_seconds = perf_counter() - start
+            if self.metrics is not None:
+                self.metrics.http(scope, status, elapsed_seconds, response_completed)
+            elapsed_ms = round(elapsed_seconds * 1000, 3)
             structlog.get_logger().info(
                 "http_request",
                 method=scope["method"],

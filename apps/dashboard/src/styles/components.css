@@ -751,3 +751,103 @@ td time {
 .modal nav a.active {
   color: var(--cyan);
 }
+.live-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text-muted, #a0aec0);
+}
+.connection-status.connected {
+  color: #5eead4;
+}
+.connection-status.reconnecting,
+.connection-status.unavailable {
+  color: #fbbf24;
+}
+.notification-toggle {
+  position: relative;
+}
+.unread-count {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  background: #be123c;
+  color: #fff;
+  border-radius: 1rem;
+  font-size: 0.65rem;
+  min-width: 17px;
+  padding: 1px 3px;
+}
+.notification-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+.notification-policy {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.notification-policy input {
+  width: auto;
+}
+.notification-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+.notification-list li {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid #28364b;
+  padding: 1rem;
+  border-radius: 0.65rem;
+  overflow-wrap: anywhere;
+}
+.notification-list li.unread {
+  border-left: 3px solid #22d3ee;
+}
+.notification-list li > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+}
+.notification-list code {
+  white-space: normal;
+}
+.notification-list time {
+  color: #a0aec0;
+  font-size: 0.75rem;
+}
+.live-activity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+@media (max-width: 768px) {
+  .connection-status > span {
+    display: none;
+  }
+  .topbar-account {
+    gap: 0.4rem;
+  }
+}
+
+.notification-list,
+.notification-list li {
+  min-width: 0;
+}
+.notification-policy input {
+  flex-shrink: 0;
+}

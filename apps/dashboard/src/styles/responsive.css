@@ -98,7 +98,7 @@
     font-size: 0.73rem;
     gap: 10px;
   }
-  .topbar-account .badge {
+  .topbar-account > .badge {
     display: none;
   }
   .metric-icon {
@@ -150,7 +150,7 @@
   .topbar-account {
     gap: 8px;
   }
-  .topbar-account > div {
+  .topbar-account > .account-details {
     display: none;
   }
   .account-avatar {
@@ -158,7 +158,8 @@
     height: 29px;
     font-size: 0.62rem;
   }
-  .topbar-account .button {
+  .topbar-account > .button,
+  .topbar-account .notification-toggle {
     width: 30px;
     min-width: 30px;
   }

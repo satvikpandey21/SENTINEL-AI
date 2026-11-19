@@ -1,6 +1,6 @@
-﻿# Administrative API contract (Phase 5)
+# Administrative API contract (Phases 5-9)
 
-The versioned backend contract is [admin-openapi.json](admin-openapi.json). Generate TypeScript types from that file; the development service also serves `/openapi.json` and `/docs`. Production disables these public documentation routes. The base path is `/api/admin`. The Phase 6 React dashboard consumes this contract; WebSockets and Grafana remain outside its scope.
+The versioned backend contract is [admin-openapi.json](admin-openapi.json). Generate TypeScript types from that file; the development service also serves `/openapi.json` and `/docs`. Production disables these public documentation routes. The base path is `/api/admin`. The React dashboard consumes this contract. Phase 7 adds the ticket and versioned WebSocket contract below; Grafana remains a separate operational component.
 
 ## Provisioning and deployment
 
@@ -153,3 +153,72 @@ docker compose --profile test run --rm tests python scripts/verify_admin.py
 It preserves existing accounts, restores original policies, removes its temporary accounts/sessions, retains audit evidence, and prints no tokens or passwords. It intentionally produces monitored demo traffic, which remains in the historical event store. Use `--origin`/`--base-url` for a different configured deployment. See [executed verification](day-5-verification.md).
 
 Design references: [Argon2 password hasher](https://argon2-cffi.readthedocs.io/en/stable/api.html), [PyJWT validation](https://pyjwt.readthedocs.io/en/stable/api.html), [OWASP CSRF guidance](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html). Local implementation and test evidence remain the source of truth for this contract.
+
+## Phase 7 real-time contract
+
+`POST /api/admin/ws/v1/ticket` requires bearer authentication (ADMIN or ANALYST), an exact
+allowed Origin and `X-CSRF-Intent: sentinel-admin`. Response: `{ticket, expires_in:20,
+protocol:"sentinel.security.v1"}` with no-store caching. The ticket is a 43-character
+cryptographically random, one-time credential stored by SHA-256 key in Redis. Errors retain
+401/403/429/503 safe response semantics; rate limits use Retry-After. Do not persist or log
+the response. The HTTP schema is exported in `admin-openapi.json`.
+
+Upgrade `GET /api/admin/ws/v1/security` using the two offered subprotocols
+`sentinel.security.v1` and `sentinel.ticket.<ticket>`. No query parameters are accepted.
+The server selects only `sentinel.security.v1`. Origin is mandatory and bound to the ticket;
+CORS alone does not protect upgrades. Tickets expire after 20 seconds and GETDEL prevents
+replay/concurrent redemption. Pre-upgrade denial becomes HTTP 403; browsers generally expose
+an opaque failed upgrade. The browser must not retry indefinitely on ambiguous failure.
+
+Activity frames are version 1 `security.event.created` (HTTP v1) or
+`security.decision.created` (decision v2). The complete machine-readable allowlist is
+[security-notification-v1.schema.json](security-notification-v1.schema.json). Fields:
+
+- `schema_version`, `notification_id` (same stable UUID as `event_id`), `type`.
+- `occurred_at` (event time), `committed_at` (worker timestamp sampled after commit).
+- `service`, sanitized `endpoint`, `status_code`, nullable `security_action`, `degraded`.
+- At most 16 bounded `rule_ids`, optional `assessment_id`, `risk_score`, and configured
+  `severity` (`low`, `moderate`, `high`, `critical`). No assessment means all three are null.
+- At most six supported `classifications`, and `experimental` indicating ML evidence.
+
+One activity frame combines the event and its transactionally persisted assessment. It does
+not carry feature profiles, raw IPs, client pseudonyms, credentials, request IDs, bodies,
+headers, cookies, query values or full database records. Maximum serialized payload: 4096 bytes.
+Use the existing authenticated event/assessment detail routes for authoritative evidence.
+
+Control frames contain `schema_version:1`, a fresh `notification_id`, `occurred_at` and a
+`type`: `connection.ready` or `connection.heartbeat`. The client also supports
+`connection.resync_required` for future explicit invalidation. On ready, always reconcile
+through REST; there is no replay cursor. Heartbeat reply must be exactly the text
+`{"type":"connection.pong"}`. Binary/other messages close the stream.
+
+After upgrade: 4401 means expired/revoked session, disabled account or role change; the client
+signs out. 4400 means invalid application input. 1013 requests bounded temporary recovery;
+1001/1012 cover shutdown/restart. Leases, queues, heartbeat/idle settings and the session-based
+access-token expiration policy are detailed in [architecture.md](architecture.md).
+
+Delivery is best effort. Never infer database totals or guaranteed alert delivery from frame
+counts. Duplicate UUIDs are suppressed, but that is not an exactly-once transport guarantee.
+All notification read/clear UI state is local memory; no acknowledgement API is implemented.
+
+
+## Phase 9 production topology and notification lifecycle
+
+The HTTP/OpenAPI and version 1 notification payload contracts are unchanged. Production
+serves React and `/api/admin` behind the same HTTPS/WSS Caddy origin. Refresh cookies remain
+`__Secure-sentinel-refresh`, Secure, HttpOnly, SameSite=Strict, host-only and path-scoped.
+Neither the local TLS test nor tunnel configuration disables Origin/CSRF checks. Only the
+fixed private proxy address is trusted; incoming forwarded peer chains are overwritten.
+Public ingress denies demo, metrics and infrastructure-health routes. Grafana accounts
+remain separate from Sentinel roles and are not reachable through the application ingress.
+
+Authenticated online background tabs now keep receiving live hints within the existing
+connection/history/queue caps. Offline, suspended or disconnected browsers can miss hints;
+REST reconciliation remains authoritative after return/reconnect. Reconciliation and reload
+never replay historical bell alerts. The informational checkbox applies to future frames;
+last activity records a valid received notification even when its category is not displayed.
+Mark-read and clear-history affect only tab-local memory. Logout/role/session revocation and
+one-time ticket checks retain their previous security semantics.
+
+See [deployment-guide.md](deployment-guide.md) for production/local-CA/tunnel boundaries and
+[day-9-verification.md](day-9-verification.md) for executed HTTPS/WSS acceptance.

@@ -66,15 +66,30 @@ class RiskAssessment(Base):
 
 
 class AnalysisEngine:
-    def __init__(self, policy: AnalysisPolicy):
+    def __init__(self, policy: AnalysisPolicy, metrics=None):
         self.policy = policy
+        self.metrics = metrics
         self.policy_hash = hashlib.sha256(canonical_bytes(policy.model_dump())).hexdigest()
         self.model = AnomalyModel(policy)
+        if metrics is not None:
+            metrics.set("ml_enabled", int(policy.ml_enabled))
+            metrics.set("ml_model_available", int(self.model.status == "ready"))
         structlog.get_logger().info(
             "analysis_model_status", status=self.model.status, load_count=self.model.load_count
         )
 
-    async def analyze(self, session, event: SecurityEvent) -> None:
+    async def analyze(self, session, event: SecurityEvent):
+        started, outcome = monotonic(), "error"
+        try:
+            assessment = await self._analyze(session, event)
+            outcome = "success"
+            return assessment
+        finally:
+            if self.metrics is not None:
+                self.metrics.inc("analysis_operations", outcome=outcome)
+                self.metrics.observe("analysis_duration_seconds", monotonic() - started)
+
+    async def _analyze(self, session, event: SecurityEvent):
         started = monotonic()
         now = datetime.now(UTC)
         policy = self.policy
@@ -118,6 +133,7 @@ class AnalysisEngine:
             else self.model.status
         }
         if status == "observed" and completed is not None:
+            inference_started = monotonic()
             try:
                 ml = self.model.infer(completed, complete_window=True)
             except Exception as error:
@@ -125,6 +141,12 @@ class AnalysisEngine:
                     "analysis_ml_failed", error_type=type(error).__name__
                 )
                 ml = {"status": "inference_error"}
+            if self.metrics is not None and policy.ml_enabled:
+                self.metrics.observe(
+                    "ml_inference_duration_seconds",
+                    monotonic() - inference_started,
+                    status=ml.get("status", "other"),
+                )
             ml["window_start"] = previous_bucket
             ml["window_end"] = previous_bucket + policy.window_seconds
             ml["features"] = completed.model_dump()
@@ -156,20 +178,19 @@ class AnalysisEngine:
                 if threat["detection_method"] == "isolation_forest"
                 else None
             )
-        session.add(
-            RiskAssessment(
-                assessment_id=uuid4(),
-                event_id=event.event_id,
-                **identity,
-                risk_score=result["risk_score"],
-                severity=result["severity"],
-                rule_version=RULE_VERSION,
-                model_version=ml.get("model_version"),
-                feature_schema=FEATURE_SCHEMA,
-                evidence=evidence,
-                analyzed_at=now,
-            )
+        assessment = RiskAssessment(
+            assessment_id=uuid4(),
+            event_id=event.event_id,
+            **identity,
+            risk_score=result["risk_score"],
+            severity=result["severity"],
+            rule_version=RULE_VERSION,
+            model_version=ml.get("model_version"),
+            feature_schema=FEATURE_SCHEMA,
+            evidence=evidence,
+            analyzed_at=now,
         )
+        session.add(assessment)
         record.state, record.policy_hash, record.updated_at = dict(state), self.policy_hash, now
         structlog.get_logger().info(
             "risk_analyzed",
@@ -178,6 +199,10 @@ class AnalysisEngine:
             risk_score=result["risk_score"],
             ml_status=ml["status"],
         )
+        if self.metrics is not None:
+            self.metrics.inc("statistical_results", status=statistics.get("status", "other"))
+            self.metrics.inc("ml_results", status=ml.get("status", "other"))
+        return assessment
 
 
 class AssessmentRepository:

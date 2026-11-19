@@ -88,6 +88,11 @@ def main() -> None:
             output.write(template)
     except FileExistsError:
         raise SystemExit(".env already exists; refusing to overwrite credentials.") from None
+    try:
+        from scripts.init_observability import initialize
+    except ModuleNotFoundError:
+        from init_observability import initialize
+    initialize(ROOT)
     print("Created .env with random local credentials. Keep it private.")
 
 

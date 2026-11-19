@@ -1,0 +1,127 @@
+{
+  "groups": [
+    {
+      "name": "sentinel-operations",
+      "interval": "30s",
+      "rules": [
+        {
+          "alert": "SentinelAdminUnavailable",
+          "expr": "up{job=\"sentinel-apps\",component=\"admin-api\"} == 0",
+          "for": "2m",
+          "labels": {
+            "severity": "critical",
+            "scope": "operational"
+          },
+          "annotations": {
+            "summary": "SentinelAdminUnavailable",
+            "description": "Administrative metrics listener unavailable; inspect service readiness."
+          }
+        },
+        {
+          "alert": "SentinelWorkerUnavailable",
+          "expr": "up{job=\"sentinel-apps\",component=\"event-worker\"} == 0 or sentinel_worker_connected{service=\"sentinel-event-worker\"} == 0 or sentinel_worker_ready{service=\"sentinel-event-worker\"} == 0",
+          "for": "2m",
+          "labels": {
+            "severity": "critical",
+            "scope": "operational"
+          },
+          "annotations": {
+            "summary": "SentinelWorkerUnavailable",
+            "description": "Event worker is unavailable or disconnected from RabbitMQ."
+          }
+        },
+        {
+          "alert": "SentinelDependencyUnavailable",
+          "expr": "sentinel_dependency_up == 0",
+          "for": "3m",
+          "labels": {
+            "severity": "warning",
+            "scope": "operational"
+          },
+          "annotations": {
+            "summary": "SentinelDependencyUnavailable",
+            "description": "A completed application dependency probe reports unavailable."
+          }
+        },
+        {
+          "alert": "SentinelEventBacklog",
+          "expr": "rabbitmq_detailed_queue_messages_ready{queue=\"sentinel.security.events.v1\"} > 1000",
+          "for": "5m",
+          "labels": {
+            "severity": "warning",
+            "scope": "operational"
+          },
+          "annotations": {
+            "summary": "SentinelEventBacklog",
+            "description": "More than 1000 events have remained ready for five minutes."
+          }
+        },
+        {
+          "alert": "SentinelWorkerFailures",
+          "expr": "sum(rate(sentinel_worker_deliveries_total{outcome=~\"error|quarantined\"}[5m])) / clamp_min(sum(rate(sentinel_worker_deliveries_total[5m])), 0.001) > 0.05 and sum(increase(sentinel_worker_deliveries_total[5m])) > 20",
+          "for": "5m",
+          "labels": {
+            "severity": "warning",
+            "scope": "operational"
+          },
+          "annotations": {
+            "summary": "SentinelWorkerFailures",
+            "description": "Over 5% processing failures/quarantines with at least 20 deliveries in five minutes."
+          }
+        },
+        {
+          "alert": "SentinelApiErrors",
+          "expr": "sum by(service) (rate(sentinel_http_requests_total{status_class=\"5xx\"}[5m])) / clamp_min(sum by(service) (rate(sentinel_http_requests_total[5m])), 0.001) > 0.05 and sum by(service) (increase(sentinel_http_requests_total[5m])) > 100",
+          "for": "5m",
+          "labels": {
+            "severity": "warning",
+            "scope": "operational"
+          },
+          "annotations": {
+            "summary": "SentinelApiErrors",
+            "description": "Over 5% HTTP 5xx responses with at least 100 requests in five minutes."
+          }
+        },
+        {
+          "alert": "SentinelApiLatency",
+          "expr": "histogram_quantile(0.95, sum by(service,le) (rate(sentinel_http_duration_seconds_bucket[5m]))) > 0.5 and sum by(service) (increase(sentinel_http_duration_seconds_count[5m])) > 100",
+          "for": "10m",
+          "labels": {
+            "severity": "warning",
+            "scope": "operational"
+          },
+          "annotations": {
+            "summary": "SentinelApiLatency",
+            "description": "Observed p95 response duration exceeds 500ms for ten minutes at sufficient volume."
+          }
+        },
+        {
+          "alert": "SentinelNotificationDrops",
+          "expr": "sum(increase(sentinel_notification_dropped_total[5m])) > 20",
+          "for": "5m",
+          "labels": {
+            "severity": "warning",
+            "scope": "operational"
+          },
+          "annotations": {
+            "summary": "SentinelNotificationDrops",
+            "description": "More than 20 optional notification hints dropped in five minutes; REST remains authoritative."
+          }
+        },
+        {
+          "alert": "SentinelDeadLetters",
+          "expr": "rabbitmq_detailed_queue_messages_ready{queue=\"sentinel.security.events.v1.dead\"} > 0",
+          "for": "5m",
+          "labels": {
+            "severity": "warning",
+            "scope": "operational"
+          },
+          "annotations": {
+            "summary": "SentinelDeadLetters",
+            "description": "Quarantined audit events require operator inspection and the existing replay procedure."
+          }
+        }
+      ]
+    }
+  ]
+}

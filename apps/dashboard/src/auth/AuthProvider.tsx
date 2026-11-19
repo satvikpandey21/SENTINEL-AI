@@ -6,6 +6,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
+import { RealtimeProvider } from '../realtime/RealtimeProvider';
 import { DashboardApi } from '../api/client';
 import type { AuthState, Session } from './session';
 type AuthValue = { state: AuthState; session: Session; api: DashboardApi };
@@ -17,7 +18,11 @@ export function AuthProvider({ session, children }: { session: Session; children
     void session.start();
     return session.watchVisibility();
   }, [session]);
-  return <AuthContext.Provider value={{ state, session, api }}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={{ state, session, api }}>
+      <RealtimeProvider session={session}>{children}</RealtimeProvider>
+    </AuthContext.Provider>
+  );
 }
 export function useAuth() {
   const value = useContext(AuthContext);

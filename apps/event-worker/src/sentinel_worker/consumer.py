@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+from time import monotonic
 
 import structlog
 from aio_pika.abc import AbstractChannel, AbstractIncomingMessage
@@ -38,10 +39,13 @@ def is_transient(error: Exception) -> bool:
 
 
 class EventConsumer:
-    def __init__(self, store: EventStore, channel: AbstractChannel, settings: Settings) -> None:
+    def __init__(
+        self, store: EventStore, channel: AbstractChannel, settings: Settings, metrics=None
+    ) -> None:
         self.store = store
         self.channel = channel
         self.settings = settings
+        self.metrics = metrics
 
     async def _quarantine(self, message, reason, event: MonitoringEvent | None = None) -> None:
         notice = DeadLetterNotice(
@@ -54,24 +58,41 @@ class EventConsumer:
                 mandatory=True,
                 timeout=self.settings.event_operation_timeout_seconds,
             )
+        if self.metrics is not None:
+            self.metrics.inc("dead_letter_published", reason=reason)
         await message.ack()
         structlog.get_logger().warning("event_quarantined", reason=reason)
 
     async def handle(self, message: AbstractIncomingMessage) -> None:
+        started, outcome = monotonic(), "error"
+        try:
+            outcome = await self._handle(message)
+        finally:
+            if self.metrics is not None:
+                self.metrics.inc("worker_deliveries", outcome=outcome)
+                self.metrics.observe(
+                    "worker_duration_seconds", monotonic() - started, outcome=outcome
+                )
+
+    async def _handle(self, message: AbstractIncomingMessage):
         if len(message.body) > self.settings.event_max_bytes:
             await self._quarantine(message, "oversized_event")
-            return
+            return "quarantined"
         try:
             event = parse_event(message.body, self.settings.event_max_bytes)
         except (ValidationError, ValueError):
             await self._quarantine(message, "invalid_event")
-            return
+            return "quarantined"
         for attempt in range(self.settings.worker_storage_attempts):
             try:
                 async with asyncio.timeout(self.settings.worker_storage_timeout_seconds):
                     inserted = await self.store.persist(event)
             except Exception as error:
                 transient = is_transient(error)
+                if self.metrics is not None:
+                    self.metrics.inc(
+                        "worker_storage_errors", outcome="transient" if transient else "permanent"
+                    )
                 structlog.get_logger().warning(
                     "event_storage_failed",
                     error_type=type(error).__name__,
@@ -80,10 +101,10 @@ class EventConsumer:
                 )
                 if not transient:
                     await self._quarantine(message, "permanent_storage_error", event)
-                    return
+                    return "quarantined"
                 if attempt + 1 == self.settings.worker_storage_attempts:
                     await self._quarantine(message, "retry_exhausted", event)
-                    return
+                    return "quarantined"
                 await asyncio.sleep(min(5.0, self.settings.event_retry_delay_seconds * 2**attempt))
             else:
                 await message.ack()
@@ -92,4 +113,4 @@ class EventConsumer:
                     event_id=str(event.event_id),
                     request_id=event.request_id,
                 )
-                return
+                return "persisted" if inserted else "duplicate"

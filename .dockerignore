@@ -12,3 +12,13 @@
 node_modules
 docs
 *.log
+.secrets
+
+# Nested frontend dependencies/artifacts and private environment files.
+**/node_modules
+**/dist
+**/coverage
+**/test-results
+**/playwright-report
+**/.env
+**/.env.*

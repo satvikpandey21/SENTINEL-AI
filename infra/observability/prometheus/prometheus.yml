@@ -1,0 +1,131 @@
+{
+  "global": {
+    "scrape_interval": "30s",
+    "evaluation_interval": "30s",
+    "scrape_timeout": "5s"
+  },
+  "rule_files": [
+    "/etc/prometheus/alerts.yml"
+  ],
+  "scrape_configs": [
+    {
+      "job_name": "sentinel-apps",
+      "scrape_interval": "15s",
+      "scrape_timeout": "5s",
+      "sample_limit": 20000,
+      "body_size_limit": "4MB",
+      "authorization": {
+        "credentials_file": "/run/secrets/metrics_token"
+      },
+      "static_configs": [
+        {
+          "targets": [
+            "admin-api:9100"
+          ],
+          "labels": {
+            "component": "admin-api"
+          }
+        },
+        {
+          "targets": [
+            "demo-api:9100"
+          ],
+          "labels": {
+            "component": "demo-api"
+          }
+        },
+        {
+          "targets": [
+            "event-worker:9100"
+          ],
+          "labels": {
+            "component": "event-worker"
+          }
+        }
+      ],
+      "metric_relabel_configs": [
+        {
+          "source_labels": [
+            "__name__"
+          ],
+          "regex": "sentinel_.*|process_.*",
+          "action": "keep"
+        }
+      ]
+    },
+    {
+      "job_name": "rabbitmq",
+      "scrape_interval": "30s",
+      "sample_limit": 3000,
+      "body_size_limit": "2MB",
+      "static_configs": [
+        {
+          "targets": [
+            "rabbitmq:15692"
+          ]
+        }
+      ],
+      "basic_auth": {
+        "username": "sentinel-metrics",
+        "password_file": "/run/secrets/rabbitmq_metrics_password"
+      },
+      "metric_relabel_configs": [
+        {
+          "regex": "__name__|job|instance|cluster|le",
+          "action": "labelkeep"
+        }
+      ]
+    },
+    {
+      "job_name": "rabbitmq-queues",
+      "scrape_interval": "30s",
+      "sample_limit": 100,
+      "body_size_limit": "2MB",
+      "static_configs": [
+        {
+          "targets": [
+            "rabbitmq:15692"
+          ]
+        }
+      ],
+      "basic_auth": {
+        "username": "sentinel-metrics",
+        "password_file": "/run/secrets/rabbitmq_metrics_password"
+      },
+      "metric_relabel_configs": [
+        {
+          "source_labels": [
+            "queue"
+          ],
+          "regex": "sentinel\\.security\\.events\\.v1(\\.dead)?",
+          "action": "keep"
+        },
+        {
+          "regex": "__name__|job|instance|queue|vhost",
+          "action": "labelkeep"
+        }
+      ],
+      "metrics_path": "/metrics/detailed",
+      "params": {
+        "family": [
+          "queue_coarse_metrics"
+        ],
+        "vhost": [
+          "/"
+        ]
+      }
+    },
+    {
+      "job_name": "prometheus",
+      "scrape_interval": "30s",
+      "static_configs": [
+        {
+          "targets": [
+            "localhost:9090"
+          ]
+        }
+      ],
+      "sample_limit": 3000
+    }
+  ]
+}

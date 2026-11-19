@@ -20,6 +20,12 @@ x-app-environment: &app-environment
   SENTINEL_WORKER_PREFETCH: ${SENTINEL_WORKER_PREFETCH:-16}
   SENTINEL_WORKER_STORAGE_ATTEMPTS: ${SENTINEL_WORKER_STORAGE_ATTEMPTS:-4}
   SENTINEL_WORKER_STORAGE_TIMEOUT_SECONDS: ${SENTINEL_WORKER_STORAGE_TIMEOUT_SECONDS:-3}
+  SENTINEL_REALTIME_BUFFER_CAPACITY: ${SENTINEL_REALTIME_BUFFER_CAPACITY:-256}
+  SENTINEL_REALTIME_PUBLISH_TIMEOUT_SECONDS: ${SENTINEL_REALTIME_PUBLISH_TIMEOUT_SECONDS:-0.2}
+  SENTINEL_METRICS_ENABLED: ${SENTINEL_METRICS_ENABLED:-true}
+  SENTINEL_METRICS_PORT: "9100"
+  SENTINEL_METRICS_TOKEN_FILE: /run/secrets/metrics_token
+  SENTINEL_METRICS_PROBE_SECONDS: ${SENTINEL_METRICS_PROBE_SECONDS:-30}
   SENTINEL_DYNAMIC_POLICIES: "true"
   SENTINEL_PROTECTION_POLICIES: ${SENTINEL_PROTECTION_POLICIES:-null}
   SENTINEL_PROTECTION_REDIS_TIMEOUT_SECONDS: ${SENTINEL_PROTECTION_REDIS_TIMEOUT_SECONDS:-0.2}
@@ -31,7 +37,8 @@ x-app: &app
     context: .
     target: runtime
   environment: *app-environment
-  networks: [backend]
+  networks: [backend, telemetry]
+  secrets: [metrics_token]
   init: true
   read_only: true
   tmpfs: [/tmp]
@@ -44,7 +51,7 @@ x-app: &app
     timeout: 6s
     retries: 3
     start_period: 15s
-  logging:
+  logging: &bounded-logging
     driver: json-file
     options:
       max-size: 10m
@@ -89,7 +96,8 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
       - ./infra/rabbitmq/20-sentinel.conf:/etc/rabbitmq/conf.d/20-sentinel.conf:ro
-    networks: [backend]
+      - ./infra/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+    networks: [backend, telemetry]
     restart: unless-stopped
     healthcheck:
       test: [CMD, rabbitmq-diagnostics, -q, check_running]
@@ -116,7 +124,16 @@ services:
       SENTINEL_ADMIN_DEPLOYMENT: ${SENTINEL_ADMIN_DEPLOYMENT:-production}
       SENTINEL_ADMIN_COOKIE_SECURE: ${SENTINEL_ADMIN_COOKIE_SECURE:-true}
       SENTINEL_ADMIN_ALLOWED_ORIGINS: ${SENTINEL_ADMIN_ALLOWED_ORIGINS:-["https://localhost"]}
-    networks: [backend, ingress]
+      SENTINEL_ADMIN_WS_TICKET_SECONDS: ${SENTINEL_ADMIN_WS_TICKET_SECONDS:-20}
+      SENTINEL_ADMIN_WS_TICKET_LIMIT: ${SENTINEL_ADMIN_WS_TICKET_LIMIT:-12}
+      SENTINEL_ADMIN_WS_MAX_CONNECTIONS: ${SENTINEL_ADMIN_WS_MAX_CONNECTIONS:-128}
+      SENTINEL_ADMIN_WS_ACCOUNT_CONNECTIONS: ${SENTINEL_ADMIN_WS_ACCOUNT_CONNECTIONS:-8}
+      SENTINEL_ADMIN_WS_SESSION_CONNECTIONS: ${SENTINEL_ADMIN_WS_SESSION_CONNECTIONS:-4}
+      SENTINEL_ADMIN_WS_QUEUE_CAPACITY: ${SENTINEL_ADMIN_WS_QUEUE_CAPACITY:-32}
+      SENTINEL_ADMIN_WS_HEARTBEAT_SECONDS: ${SENTINEL_ADMIN_WS_HEARTBEAT_SECONDS:-20}
+      SENTINEL_ADMIN_WS_REVALIDATE_SECONDS: ${SENTINEL_ADMIN_WS_REVALIDATE_SECONDS:-15}
+      SENTINEL_ADMIN_WS_IDLE_SECONDS: ${SENTINEL_ADMIN_WS_IDLE_SECONDS:-60}
+    networks: [backend, ingress, telemetry]
     ports: ['127.0.0.1:8000:8000']
     depends_on:
       migrate:
@@ -174,14 +191,17 @@ services:
     environment:
       <<: *app-environment
       SENTINEL_RUN_INTEGRATION: "1"
+      SENTINEL_METRICS_ENABLED: "false"
       SENTINEL_DYNAMIC_POLICIES: "false"
       COVERAGE_FILE: /tmp/.coverage
       OMP_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
-    networks: [backend]
+    networks: [backend, telemetry, observability]
+    secrets: [metrics_token, grafana_password]
     volumes:
       - ./models:/app/models:ro
+      - ./infra/observability:/app/infra/observability:ro
     depends_on:
       admin-api:
         condition: service_healthy
@@ -189,15 +209,133 @@ services:
         condition: service_healthy
       event-worker:
         condition: service_healthy
+      prometheus:
+        condition: service_healthy
+      grafana:
+        condition: service_healthy
     command: [python, -m, pytest, -p, 'no:cacheprovider', --cov=sentinel_security, --cov=sentinel_api, --cov=sentinel_demo, --cov=sentinel_worker, --cov-report=term-missing, --cov-fail-under=85, -q]
+
+
+  observability-init:
+    <<: *app
+    user: "10001:10001"
+    environment:
+      RABBITMQ_USER: ${RABBITMQ_USER:-sentinel}
+    secrets: [rabbitmq_management_password, rabbitmq_metrics_password]
+    networks: [backend]
+    command: [python, -m, sentinel_security.observability_bootstrap]
+    restart: 'no'
+    mem_limit: 128m
+    cpus: 0.25
+    healthcheck:
+      disable: true
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  prometheus:
+    logging: *bounded-logging
+    image: prom/prometheus:v3.13.5@sha256:aafa9d694e6a883c02db516d9f6e5b84e14195f49a2a6456a4cca815edda72b9
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=1GB
+      - --query.max-concurrency=4
+      - --query.timeout=10s
+      - --query.max-samples=500000
+      - --web.max-connections=32
+    volumes:
+      - ./infra/observability/prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    secrets: [metrics_token, rabbitmq_metrics_password]
+    networks: [telemetry, observability]
+    mem_limit: 512m
+    cpus: 1.0
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1:9090/-/ready]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    depends_on:
+      observability-init:
+        condition: service_completed_successfully
+
+  grafana:
+    logging: *bounded-logging
+    image: grafana/grafana:13.3.1@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf
+    environment:
+      GF_SECURITY_ADMIN_USER: sentinel-ops
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_ALLOW_ORG_CREATE: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_SECURITY_COOKIE_SAMESITE: strict
+      GF_SECURITY_COOKIE_SECURE: ${SENTINEL_GRAFANA_COOKIE_SECURE:-false}
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_PLUGINS_PREINSTALL_AUTO_UPDATE: "false"
+      GF_PLUGINS_PLUGIN_ADMIN_ENABLED: "false"
+      GF_LIVE_MAX_CONNECTIONS: "0"
+      GOMEMLIMIT: 320MiB
+      GF_PLUGINS_DISABLE_PLUGINS: grafana-advisor-app,grafana-exploretraces-app,grafana-lokiexplore-app,grafana-metricsdrilldown-app,grafana-pyroscope-app
+      GF_LOG_LEVEL: warn
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    secrets: [grafana_password]
+    networks: [observability, ingress]
+    ports: ['127.0.0.1:3000:3000']
+    mem_limit: 512m
+    cpus: 1.0
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1:3000/api/health]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    depends_on:
+      prometheus:
+        condition: service_healthy
 
 networks:
   backend:
     internal: true
   ingress:
     driver: bridge
+  telemetry:
+    internal: true
+  observability:
+    internal: true
 
 volumes:
   postgres_data:
   redis_data:
   rabbitmq_data:
+  prometheus_data:
+  grafana_data:
+
+secrets:
+  metrics_token:
+    file: ./.secrets/observability/metrics_token
+  grafana_password:
+    file: ./.secrets/observability/grafana_password
+  rabbitmq_metrics_password:
+    file: ./.secrets/observability/rabbitmq_metrics_password
+  rabbitmq_management_password:
+    file: ./.secrets/observability/rabbitmq_management_password

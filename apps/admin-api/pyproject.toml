@@ -7,7 +7,7 @@ name = "sentinel-admin-api"
 version = "0.1.0"
 description = "SENTINEL AI administrative service"
 requires-python = ">=3.11"
-dependencies = ["sentinel-security==0.1.0", "uvicorn>=0.34,<1"]
+dependencies = ["sentinel-security==0.1.0", "uvicorn>=0.34,<1", "websockets>=17,<18"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

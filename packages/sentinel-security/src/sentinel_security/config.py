@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     trusted_proxy_cidrs: tuple[str, ...] = ()
     analysis: AnalysisPolicy = Field(default_factory=AnalysisPolicy)
 
+    metrics_enabled: bool = False
+    metrics_port: int = Field(default=9100, ge=1024, le=65535)
+    metrics_token_file: str = "/run/secrets/metrics_token"  # noqa: S105 - file path
+    metrics_probe_seconds: float = Field(default=30, ge=5, le=300)
+
     dynamic_policies: bool = False
     protection_enabled: bool = False
     protection_redis_timeout_seconds: float = Field(default=0.2, ge=0.01, le=2, allow_inf_nan=False)
@@ -57,6 +62,8 @@ class Settings(BaseSettings):
     worker_prefetch: int = Field(default=16, ge=1, le=128)
     worker_storage_attempts: int = Field(default=4, ge=1, le=10)
     worker_storage_timeout_seconds: float = Field(default=3, ge=0.1, le=30)
+    realtime_buffer_capacity: int = Field(default=256, ge=1, le=2048)
+    realtime_publish_timeout_seconds: float = Field(default=0.2, ge=0.01, le=2)
 
     @field_validator("client_identity_key")
     @classmethod
