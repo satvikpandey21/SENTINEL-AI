@@ -169,7 +169,7 @@ The demo API, PostgreSQL, Redis and RabbitMQ are **not publicly exposed** by the
 From the **repository root**, request the private, protected demo endpoint:
 
 ```bash
-docker compose exec -T demo-api python -c "import urllib.request,urllib.error; u='http://127.0.0.1:8000/api/demo/limited'; [(lambda i: print(i, 'HTTP', (lambda: (lambda r: r.status)(urllib.request.urlopen(u,timeout=5)))()))(i) for i in range(1,4)]"
+docker compose exec -T demo-api python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/api/demo/ping').status)"
 ```
 
 You can also use the [verification scripts](docs/day-9-verification.md) and the private demo API to generate a controlled burst that results in **HTTP 429**, then inspect **Security Events**, **Threat Intelligence**, and the **notification center**. Avoid generating traffic against external targets.
