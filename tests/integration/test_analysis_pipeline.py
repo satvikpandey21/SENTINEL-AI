@@ -213,7 +213,9 @@ async def test_real_trained_model_contributes_evidence(resources, scenario, tmp_
         )
     )
     store = EventStore(resources.session_factory, engine)
-    start = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=3)
+    # Training may cross a minute boundary after the fixture timestamp was captured.
+    # Anchor every event to one clock so both completed windows are deterministic.
+    start = scenario.occurred_at.replace(second=0, microsecond=0) - timedelta(minutes=3)
     for i in range(30):
         await store.persist(
             next_event(
@@ -224,7 +226,7 @@ async def test_real_trained_model_contributes_evidence(resources, scenario, tmp_
             )
         )
     await store.persist(next_event(scenario, occurred_at=start + timedelta(minutes=2)))
-    await store.persist(next_event(scenario))
+    await store.persist(next_event(scenario, occurred_at=start + timedelta(minutes=3)))
     rows = await assessments(resources, scenario)
     assert any(row.evidence["ml"]["status"] == "insufficient_traffic" for row in rows)
     inferred = [row for row in rows if row.model_version]

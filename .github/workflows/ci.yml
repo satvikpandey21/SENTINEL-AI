@@ -64,7 +64,11 @@ jobs:
           name: experimental-model-evaluation
           path: .artifacts/evaluation.json
       - if: failure()
-        run: docker compose logs --tail=100
+        run: |
+          docker compose logs --tail=100
+          if [ -f .env.production-test ]; then
+            docker compose --env-file .env.production-test -p sentinel-production-test -f compose.yaml -f compose.production.yaml -f compose.production-test.yaml logs --tail=100
+          fi
       - if: always()
         run: |
           docker compose down

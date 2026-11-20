@@ -16,14 +16,20 @@ from deploy import ROOT, command, validate
 def main(faults=False):
     base = command(ROOT / ".env.production-test", "sentinel-production-test", "local-test")
 
-    def run(*args, binary=False):
+    def run(*args, binary=False, input=None, timeout=240):
         return subprocess.check_output(
-            [*base, *args], cwd=ROOT, text=not binary, stderr=subprocess.PIPE
+            [*base, *args],
+            cwd=ROOT,
+            text=not binary,
+            stderr=subprocess.PIPE,
+            input=input,
+            timeout=timeout,
         )
 
     config = json.loads(run("config", "--format", "json"))
     report = validate(config, "local-test")
     output = ROOT / ".artifacts/day9-local-root.crt"
+    output.parent.mkdir(parents=True, exist_ok=True)
     run("cp", "ingress:/data/caddy/pki/authorities/local/root.crt", str(output))
     context = ssl.create_default_context(cafile=str(output))
 
@@ -86,23 +92,32 @@ def main(faults=False):
         )
     report["proxy_configs_parse"] = True
 
-    def snapshot():
-        code = """import asyncio,json
-from sqlalchemy import select,func
-from sentinel_security.config import Settings
-from sentinel_security.infrastructure import Resources
-from sentinel_security.storage import SecurityEventRecord
-async def main():
- async with Resources(Settings()) as r:
-  async with r.session_factory() as s:
-   rows=await s.scalar(select(func.count()).select_from(SecurityEventRecord))
-   query=select(SecurityEventRecord.event_id).order_by(SecurityEventRecord.event_id).limit(1)
-   first=await s.scalar(query)
-   print(json.dumps({'events':rows,'first_event':str(first)}))
-asyncio.run(main())"""
-        return json.loads(run("exec", "-T", "admin-api", "python", "-c", code))
+    def event_probe(*args):
+        try:
+            return json.loads(
+                run(
+                    "exec",
+                    "-T",
+                    "admin-api",
+                    "python",
+                    "-",
+                    *args,
+                    input=(ROOT / "scripts/deployment_events.py").read_text(),
+                    timeout=90,
+                )
+            )
+        except subprocess.CalledProcessError as error:
+            # The probe emits only identifiers/counts and sanitized database error types.
+            raise RuntimeError(f"Deployment event probe failed: {error.stderr}") from None
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Deployment event probe exceeded its 90s process deadline") from None
 
     if faults:
+        # Seed through the private demo API and wait for the worker's committed row before
+        # interrupting any service. Each invocation receives a fresh server request ID.
+        before = event_probe("seed")
+        assert before["events"] > 0, "The generated demo event must be persisted before faults"
+        sample = before["sample"]
         marker = "phase9-canary-" + secrets.token_hex(12)
         try:
             run("stop", "admin-api")
@@ -122,16 +137,20 @@ asyncio.run(main())"""
             run("up", "-d", "--wait", "--wait-timeout", "180")
         assert marker not in run("logs", "--tail", "100", "ingress")
         report["failed_proxy_log_redaction"] = True
-        before = snapshot()
-        assert before["events"] > 0
         run("restart", "postgres", "redis", "rabbitmq", "event-worker", "admin-api")
         run("up", "-d", "--wait", "--wait-timeout", "180")
-        after = snapshot()
-        assert after["events"] >= before["events"] and after["first_event"] == before["first_event"]
+        after = event_probe(
+            "check", "--request-id", sample["request_id"], "--event-id", sample["event_id"]
+        )
+        assert after["events"] >= before["events"], "Persisted event count fell after restart"
+        assert after["first_event"] == before["first_event"], "Original first event lost on restart"
+        assert after["sample"] == sample, "Generated event changed or disappeared after restart"
         report["persistent_restart"] = {
             "events_before": before["events"],
             "events_after": after["events"],
             "sample_preserved": True,
+            "request_id": sample["request_id"],
+            "event_id": sample["event_id"],
         }
     report["public_deployment"] = False
     print(json.dumps(report, indent=2))
